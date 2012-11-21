@@ -530,7 +530,7 @@ int lh2level, lreallevel;
 
 
 
-int main( int argc, char *argv[] )
+int main_orig( int argc, char *argv[] )
 
 {
   /* resulting name for ops file
@@ -665,9 +665,12 @@ int main( int argc, char *argv[] )
 
   times(&end);
   TIME( grelev_time );
-
+  
+  output_planner_info();  
+  return 0; 
+  
   times(&start);
-
+  
   /* now build globally accessible connectivity graph
    */
   build_connectivity_graph();
@@ -731,11 +734,15 @@ void output_planner_info( void )
 	  greach_time, gnum_pp_facts, gnum_actions );
   printf( "\n            %7.2f seconds collecting %d relevant facts", 
 	  grelev_time, gnum_relevant_facts );
+    
+  printf("\n");
+  /*
   printf( "\n            %7.2f seconds building connectivity graph", gconn_time );
   printf( "\n            %7.2f seconds building (std) graph", gbuild_time );
   printf( "\n            %7.2f seconds CNF output time", gcnf_time );
   printf( "\n            %7.2f seconds total planner time (solving not included)\n\n", 
 	  gtempl_time + greach_time + grelev_time + gconn_time + gbuild_time + gcnf_time);
+  */
 }
 
 void output_planner_info_file(FILE* fp, int numSteps) {
@@ -884,10 +891,12 @@ Bool process_command_line( int argc, char *argv[] )
     }
   }
 
+  /*
   if ( gcmd_line.cnfout < 0 || gcmd_line.cnfout > 4 ||
        gcmd_line.cnflayer < 1 ) {
     return FALSE;
   }
+  */
        
 
   return TRUE;

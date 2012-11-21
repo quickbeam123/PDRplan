@@ -43,7 +43,7 @@ SOURCES = main.c \
 	graph.c \
 	cnfout.c
 
-PDR_SOURCES = Main.cpp
+CPP_SOURCES = Main.cpp
                 
 OBJECTS = $(SOURCES:.c=.o)
 

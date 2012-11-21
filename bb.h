@@ -42,7 +42,10 @@
 #include <sys/timeb.h>
 #include <sys/times.h>
 
-
+#ifdef __cplusplus
+extern "C"
+{
+#endif
 
 
 
@@ -965,7 +968,7 @@ void bb_usage( void );
 Bool process_command_line( int argc, char *argv[] );
 
 
-
+int main_orig( int argc, char *argv[] );
 
 
 
@@ -1404,6 +1407,8 @@ extern int *gnum_relaxed_ops_at;
 extern Decvar gD[MAX_D_DECVARS];
 extern int gnum_D;
 
-
+#ifdef __cplusplus
+}
+#endif
 
 #endif
