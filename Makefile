@@ -12,14 +12,16 @@ ADDONS	=
 
 CC      = gcc
 
-CFLAGS	= -O6 -Wall -ansi -static $(TYPE) $(ADDONS) -g
+CFLAGS	= -O6 -Wall -ansi $(TYPE) $(ADDONS) -g 
+#-static
 #-g -pg
 
 LIBS    = -lm
 
 CPP     = g++
 
-CPPFLAGS = -ansi -Wall -pedantic -static
+CPPFLAGS = -O6 -Wall -ansi -g
+#-static
 
 
 ####### Files
