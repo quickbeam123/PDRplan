@@ -29,8 +29,8 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <signal.h>
 
 #include <cstring>
+#include <climits>
 #include <cerrno>
-
 
 #include <list>
 #include <algorithm>
@@ -282,7 +282,7 @@ struct SolvingContext {
         printf("\t%zu subsumed (%zu extra killed).\n",oblig_subsumed,oblig_killed);      
       else
         printf("\t%zu subsumed.\n",oblig_subsumed);      
-      if (gcmd_line.obl_survive)
+      if (gcmd_line.obl_survive == 2 || gcmd_line.obl_subsumption == 2)
         printf("\n\t%zu obligations in the grave.\n",obl_grave.size());
             
       // The following are reset after the timing report:
@@ -450,9 +450,12 @@ struct SolvingContext {
   
   size_t      used_buffer_size;
   vector<ClauseBuffer> buffers; // for every interesting action a list (in a form of a buffer) of potential contributions to the final clause
-  vector<size_t>   actions_ord; // indices to traverse actions in specific order
   
-  BoolState       precond_lits; // false preconditions of the current action
+  vector< vector<size_t> > action_ords; //action order separately for each layer_idx
+  
+  vector<size_t>   buffer_ord;  // indices to traverse buffers in specific order
+  
+  BoolState false_precond_lits; // false preconditions of the current action
   BoolState      working_state; // the currently considered potential next state
   
   vector<size_t>       lit_ord; // for traversing literals of the output clause in a specific order
@@ -466,26 +469,52 @@ struct SolvingContext {
   size_t            extend_no_clauses;
   vector<Clause>    extend_clause_out;  // may return more than one   
   
+  vector<int>       reason_histogram;
+  static const size_t  histogram_size = 10; 
+  
   struct CompareBufferSizes {
     vector<ClauseBuffer> & buffers;
     bool operator() (size_t i,size_t j) { return (buffers[i].num_clauses < buffers[j].num_clauses); }
     CompareBufferSizes(vector<ClauseBuffer> & buffs) : buffers(buffs) {}
   };   
   
+  struct CompareActionScores {
+    vector<Action *> & actions;
+    bool operator() (size_t i,size_t j) { return (actions[i]->score < actions[j]->score); }
+    CompareActionScores(vector<Action *> & acts) : actions(acts) {}
+  };
+  
   char extend(size_t layer_idx, BoolState const & state, bool pushTest, bool chat = false) {       
     char res = 0;
     
+    // for returning more than one action
     extend_actions_out.clear();
     
+    // for returning more than one learned clause (currently max 2)
     assert(extend_clause_out.size() == 2); // there are two slots allocated
     extend_no_clauses = 0;                 // and none of them used currently    
     
-    //printf("Extend into %zu:\n",layer_idx);
+    /*
+    printf("Extend into %zu:\n",layer_idx);
+    printState(state);
+    */
     
+    /*
+     false clauses are those which the current state doesn't satisfy
+     it is typically much smaller set than the whole layers_delta[layer_idx]
+     
+     it pays off to fosuc on false clauses first
+     > for the positive case, we only look at the other clauses (which the action could have made false due to a delete effect)
+       when the action looks plausible (all precondintions are true in current and all false_clauses true in the successor)
+     > for the negative case (if the default quickreason is on) only plausible actions seek reasons
+       among the other clauses
+       
+     the "side" trick (the default resched = 2) returns an action as if was a proper successor if it satisfies some false_clauses and does not undo validity any other clause
+    */
     false_clauses.clear();
     for (size_t i = 0; i < layers_delta[layer_idx].size(); i++)
       if (clauseUnsatisfied(layers_delta[layer_idx][i]->data,state)) {
-        //printf("False clause %zu: ",false_clauses.size()); printClauseNice(layers_delta[layer_idx][i]->data);
+        // printf("False clause %zu: ",false_clauses.size()); printClauseNice(layers_delta[layer_idx][i]->data);
         false_clauses.push_back(i);
       }
     
@@ -495,35 +524,45 @@ struct SolvingContext {
     assert(false_clauses.size() > 0); // there is always a false clause, otherwise <state> could already sit in layer_idx-th layer
     // moreover, there is never a false clause from layers_deriv nor in invariant (that has been already checked "above")
     
+    // for implementing "side"
     Action *best_action = 0;
-    int best_score = (int)false_clauses.size(); // must improve to qualify    
+    int best_false_after = (int)false_clauses.size(); // must improve to qualify    
     
-    precond_lits.clear();
-    precond_lits.resize(state.size(),false);    
+    // records preconditions of the current action 
+    // used to skip reasons from false clauses "subsumed" by a failed precond reason
+    // at the same time such a clause is still considerd false with respect to "side" and its counting
+    false_precond_lits.clear();
+    false_precond_lits.resize(state.size(),false);    
     
+    // for recording reasons of "interesting" actions
+    // interesting action is an action the reason set of which is not "SUBSUMED" by the reason set of NOOP (e.g. it must make at least one false_clase true)
+    // we don't need to record reasons of non-interesting actions (this tends to speedup subsequent overall-reason computation and minimization)
     used_buffer_size = 0;
     
-    randomPermutation(actions_ord,gnum_actions);    
+    assert(layer_idx < action_ords.size());    
+    vector<size_t> & actions_ord = action_ords[layer_idx];    
+
     for (size_t act_idx = 0; act_idx < actions_ord.size(); act_idx++) {
       size_t action_idx = actions_ord[act_idx];
       Action *a = actions[action_idx];
-          
+      
+      bool plausible = true;         // as far as we see it, it could be applied and would yield a good successor (satisfying all the clauses it should)
+      bool interesting = false;      // satisfies at least on false clause -> keep the reason set for it
+      
+      // for "side"
+      bool failed_precond = false;   // know explicitly whether a side condition failed
+      int false_after = 0;           // count the number of false_clauses false in the successor      
+      bool can_do_side;              
+      bool just_because_side;        
+      
+      // give me a buffer for the current action
       ClauseBuffer & buffer = buffers[used_buffer_size++];
       buffer.clear();
       buffer.action = a;
-         
-      bool plausible = true;
-      bool interesting = false;
-           
-      bool failed_precond = false;
-      int false_after = 0;
-      
-      bool can_do_side;
-      bool just_because_side;
 
       // printf("--- Trying action %zu:",act_idx); printAction(stdout,a);      
       
-      // speculatively start preparing the new state
+      // start preparing the successor state
       working_state.clear();
       for (size_t i = 0; i < state.size(); i++)
         working_state.push_back(state[i]);      
@@ -540,7 +579,8 @@ struct SolvingContext {
       
       // useless action cannot help reaching the goal from here
       if (useless) {
-        used_buffer_size--; // the current buffer will get overwritten in the next round 
+        used_buffer_size--; // the current buffer will get overwritten in the next round         
+        a->score = INT_MAX; // syst2 had "(int)false_clauses.size();" here instead (not to discriminate the "here useless" too much), but it wasn't that successful
         continue;
       }
                   
@@ -568,7 +608,7 @@ struct SolvingContext {
                               
           failed_preconds++;
           
-          precond_lits[precond] = true;
+          false_precond_lits[precond] = true;
         }
       }
       // if (chat) printf("%zuF  ",failed_preconds);
@@ -594,7 +634,7 @@ struct SolvingContext {
           if (pushTest)
             goto next_action_1;
  
-          if (!clauseUnsatisfied(cl,precond_lits)) { // a better reason has been recorded already
+          if (!clauseUnsatisfied(cl,false_precond_lits)) { // a better reason has been recorded already
             assert(!plausible);
             continue;
           }
@@ -617,12 +657,20 @@ struct SolvingContext {
           used_buffer_size--; // the current buffer will get overwritten in the next round (the reasons are boring; effectively subsumed by those of NOOP)                    
         }
       }
-           
-      can_do_side = (gcmd_line.resched == 2) && !failed_precond && (false_after < best_score);
-      just_because_side = false;            
       
-      // only if the action still seems ok, we perform the true test
-      if (plausible || gcmd_line.quick_reason == 0 || (interesting && gcmd_line.quick_reason == 2) || (just_because_side = true, can_do_side)) {
+      if (plausible)
+        a->score = INT_MAX; // if we ever get to use the score, it will mean this action breaks something below and so can never be used successfully in this context
+      else
+        a->score = (int)buffer.num_clauses;
+           
+      can_do_side = (gcmd_line.resched == 2) && !failed_precond && (false_after < best_false_after);
+      just_because_side = false;            
+            
+      if ( plausible ||                                         // normally, only if the action still seems ok, we perform the full test
+          (gcmd_line.quick_reason == 0) ||                      // unless we don't want the quickreason trick (seems to harm on UNSAT problems)
+          (interesting && gcmd_line.quick_reason == 2) ||       // something in the middle (experimental)
+          (just_because_side = true, can_do_side) ) {            // or if we still need to check whetger "side" is an option ...
+          
         pruneInvalid(layers_deriv[layer_idx],layer_idx);
         
         size_t layers_delta_size = layers_delta[layer_idx].size();
@@ -637,7 +685,7 @@ struct SolvingContext {
         
           Clause* p_cl;
           if (i < layers_delta_size) {
-            // TODO: testing whether the test shoudn't be rather skipped
+            // TODO: testing whether the test shouldn't be rather skipped
             if (false_clause_idx < false_clauses.size() && i == false_clauses[false_clause_idx]) {
               false_clause_idx++;
               continue; // we had this one already
@@ -664,8 +712,8 @@ struct SolvingContext {
           // printf("Failed clause: "); printClauseNice(cl);
           if (pushTest)
             goto next_action_1;
-                     
-          if (!clauseUnsatisfied(cl,precond_lits)) { // a better reason has been recorded already
+
+          if (!clauseUnsatisfied(cl,false_precond_lits)) { // a better reason has been recorded already
             assert(!plausible);
             continue;
           }
@@ -693,7 +741,7 @@ struct SolvingContext {
         }
         
         //if (chat) printf(" R: %zu\n",buffer.num_clauses);
-      }      
+      }   
       
       // all clauses sat in new state
       if (plausible) {
@@ -702,30 +750,37 @@ struct SolvingContext {
       
         // there is a room for heuristics when picking just one next state        
         // printf("Succesfully going forward!\n");        
-        res = 1;        
-        extend_actions_out.push_back(a);        
-        if (!gcmd_line.spawnallstates) {
+        res = 1;
+        extend_actions_out.push_back(a);
+        if (!gcmd_line.spawnallstates) { // the way it is usually done
+
+          // syst3: bring the successful action to front
+          for (size_t i = act_idx; i > 0; i--)
+            actions_ord[i] = actions_ord[i-1];
+          actions_ord[0] = action_idx;         
+        
           // printf("SAT\n");
           return 1;
         }  
       }
                   
       if (can_do_side &&
-         isLayerState(layer_idx+1,working_state)) { // since layers_deriv are sumbsumption reduced, we might have left our own layer
-        // there is still a chance
-        
+         isLayerState(layer_idx+1,working_state)) { /* since layers_deriv are sumbsumption reduced, 
+                                                    there is still a risk the successors does not satisfy all the layer clauses of its parent */                             
         // printf("Improved best to %d with state:\n",false_after);
         // printStateHash(working_state);      
       
-        best_score = false_after;
+        best_false_after = false_after;
         best_action = a;
-      } 
+      }
       
       next_action_1: 
       // cleanup for the action
       for (int i = 0; i < numPreconds(a); i++) 
-        precond_lits[getPrecond(a,i)] = false;            
+        false_precond_lits[getPrecond(a,i)] = false;            
     }
+    
+    // all actions checked here !!!
     
     if (res) {
       // printf("SAT\n");
@@ -735,15 +790,19 @@ struct SolvingContext {
     if (pushTest)
       return 0;      
     
+    // finishing the "side" trick
     if (gcmd_line.resched == 2 && best_action != 0) {
       extend_actions_out.push_back(best_action);
-      // printf("SIDE (%d)\n",best_score);
+      // printf("SIDE (%d)\n",best_false_after);
       return 2;
     }
     
     // printf("UNSAT\n");
     
+    // still need to add the reason for NOOP
     if (!gcmd_line.noop_from_current) { // the contribution from "no-op" = false clauses from the goal layer      
+      // this branch is obsolete
+    
       assert(gcmd_line.noop_from_current); // current trick with used_buffer_size might not work for this other (anyway less efficient) option
     
       ClauseBuffer & buffer = buffers[used_buffer_size++];
@@ -768,24 +827,57 @@ struct SolvingContext {
         buffer.num_clauses++;
         buffer.clauses.push_back(cl.size());
         for (size_t j = 0; j < cl.size(); j++)
-          buffer.clauses.push_back(cl[j]);      
-      }              
+          buffer.clauses.push_back(cl[j]);
+      }
     }
     
-    // prepare the conflict clause
+    // update the order for next time
+    stable_sort(actions_ord.begin(),actions_ord.end(),CompareActionScores(actions)); // low score is better
+    
+    /*
+    printf("Uptaded actions_ord for idx %zu:\n",layer_idx);
+    for (size_t act_idx = 0; act_idx < actions_ord.size(); act_idx++) {
+      size_t action_idx = actions_ord[act_idx];
+      Action *a = actions[action_idx];
+      printf("Score: %d for ",a->score);
+      printAction(stdout,a);
+    }
+    */
+    
+    // just for fun - histogram of the number of reasons per action
+    /*
+    {
+      reason_histogram.clear();
+      reason_histogram.resize(histogram_size,0);
+      
+      for (size_t i = 0; i < used_buffer_size; i++) {
+        ClauseBuffer & buffer = buffers[i];
+        assert(buffer.num_clauses > 0);    
+        if (buffer.num_clauses <= histogram_size) {
+          reason_histogram[buffer.num_clauses-1]++;
+        }        
+      }
+      
+      for (size_t i = 0; i < histogram_size; i++)
+        printf("%3d, ",reason_histogram[i]);
+      printf(" histogram for idx %zu\n",layer_idx);
+    }
+    */
+    
+    // prepare the conflict clause -- abusing the workingstate for that (to represent the union being built)
     working_state.clear();
     working_state.resize(sigsize,false);
-    randomPermutation(actions_ord,used_buffer_size);
     
-    // printf("used_buffer_size = %zu < %d\n",used_buffer_size,gnum_actions);
+    // resize buffer ord and sort it based on buffer sizes
+    randomPermutation(buffer_ord,used_buffer_size);   // TODO: could skip the random and use identity permutation instead (no big deal, would it speed up?)
+    sort(buffer_ord.begin(),buffer_ord.end(),CompareBufferSizes(buffers)); //start with small buffers            
     
-    sort(actions_ord.begin(),actions_ord.end(),CompareBufferSizes(buffers)); //start with small buffers        
-    for (size_t act_idx = 0; act_idx < actions_ord.size(); act_idx++) {
-      ClauseBuffer & buffer = buffers[actions_ord[act_idx]];      
+    for (size_t act_idx = 0; act_idx < buffer_ord.size(); act_idx++) {
+      ClauseBuffer & buffer = buffers[buffer_ord[act_idx]];      
       assert(buffer.num_clauses > 0);      
       
       /*
-      printf("%zu contributions of action %zu: ",buffer.num_clauses,actions_ord[act_idx]);
+      printf("%zu contributions of action %zu: ",buffer.num_clauses,buffer_ord[act_idx]);
       if (buffer.action)
         printAction(stdout,buffer.action);
       else
@@ -855,15 +947,15 @@ struct SolvingContext {
       minim_attempted++;      
     
       // printf("Minimizing:\n");
-      randomPermutation(lit_ord,sigsize);
+      randomPermutation(lit_ord,sigsize); // TODO: could have better minimization heuristics (like avoiding the first action's reason first)
       for (size_t lit_idx = 0; lit_idx < sigsize; lit_idx++) {
         if (working_state[lit_ord[lit_idx]]) { // could remove this guy
           size_t saved = lit_ord[lit_idx];
           working_state[saved] = false;
           
           // check if we still "fit in" with the contributions
-          for (size_t act_idx = 0; act_idx < actions_ord.size(); act_idx++) {
-            ClauseBuffer & buffer = buffers[actions_ord[act_idx]];      
+          for (size_t act_idx = 0; act_idx < buffer_ord.size(); act_idx++) {
+            ClauseBuffer & buffer = buffers[buffer_ord[act_idx]];      
             
             size_t i = 0;
             size_t sz = 0;
@@ -924,7 +1016,7 @@ struct SolvingContext {
         extend_clause_out[0].push_back(i);
     extend_no_clauses = 1;
     
-    if (gcmd_line.minimize == 2) {     
+    if (gcmd_line.minimize == 2) {
       // printf("Looking for a second clause\n");
 
       // prepare a random permutation that first goes throught literals of the last clause
@@ -965,8 +1057,8 @@ struct SolvingContext {
             working_state[saved] = false;
             
             // check if we still "fit in" with the contributions
-            for (size_t act_idx = 0; act_idx < actions_ord.size(); act_idx++) {
-              ClauseBuffer & buffer = buffers[actions_ord[act_idx]];      
+            for (size_t act_idx = 0; act_idx < buffer_ord.size(); act_idx++) {
+              ClauseBuffer & buffer = buffers[buffer_ord[act_idx]];      
               
               size_t i = 0;
               size_t sz = 0;
@@ -1133,6 +1225,22 @@ struct SolvingContext {
   
   bool processObligations() {
     assert(phase);
+    
+    assert(gcmd_line.resched < 2 || gcmd_line.oblig_prior_stack); 
+    /* "side" is a bit weird. 
+        We don't guarantee that a state will not generate the same side next time it is considered.
+        This may lead to problems with "oblig_prior_queue" as exemplified on the WOODWORKING domain.
+        
+        Initial obligation A "sides" to give a better "B",
+        then A is considered again and sides B again
+        then B is considered and sides a better C,
+        then we need to deal with A again
+        then we need to deal with A again 
+        ... 
+       
+        BLEE %)
+    */
+    
     size_t obl_top = phase-1;  
     for(;;) {
       while (obl_top < phase && obligations[obl_top].size() == 0)
@@ -1375,6 +1483,9 @@ struct SolvingContext {
     layers_delta.push_back(Clauses());
     layers_deriv.push_back(Clauses());
     obligations.push_back(Obligations());
+        
+    action_ords.push_back(vector<size_t>());
+    randomPermutation(action_ords.back(),gnum_actions);    
            
     if (stateNotOfInvariant(start_state)) {
       printf("UNSAT: initial state doesn't satisfy the backward invariant!\n");
@@ -1389,7 +1500,7 @@ struct SolvingContext {
         printf("UNRESOLVED: Phase limit reached!\n");        
         return;
       }
-
+      
       if ((gcmd_line.cla_subsumption == 2) && // clause pushing is on          
           stateNotModel(start_state,layers_delta[phase])) {
         if (gcmd_line.pphase)
@@ -1410,6 +1521,9 @@ struct SolvingContext {
       layers_delta.push_back(Clauses());
       layers_deriv.push_back(Clauses());
       obligations.push_back(Obligations());
+      
+      action_ords.push_back(vector<size_t>());
+      randomPermutation(action_ords.back(),gnum_actions);
       
       if (gcmd_line.cla_subsumption == 2) { // clause pushing
         times(&start);

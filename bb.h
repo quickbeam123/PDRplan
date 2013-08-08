@@ -622,6 +622,8 @@ typedef struct _Action {
 
   struct _Action *next;
 
+  /* MS */
+  int score;
 } Action;
   
 

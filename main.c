@@ -769,7 +769,7 @@ void bb_usage( void )
   printf("-S <0 or 2> Obligations survive between phases (with 2 there is just one obligation at all times -> incomplete).\n");
   
   printf("-m <0 .. 2> Clause minimazation 0 - off, 1 - on, 2 - try producing two clauses\n");
-  printf("-s <0 or 2> Subsume obligations by newly derived clauses\n");
+  printf("-s <0 or 2> Subsume obligations by newly derived clauses (2 = put those that go 'off the rim' to the grave)\n");
   printf("-c <0 .. 2> Clause subsumption 0 -off, 1 - on, 2 - with clause pushing; (may detect UNSAT)\n");
   printf("-a <0 or 1> Extend (positively) in all possible ways\n");
      
@@ -841,7 +841,7 @@ Bool process_command_line( int argc, char *argv[] )
   
   gcmd_line.resched = 2;
   
-  gcmd_line.obl_survive = 0;  
+  gcmd_line.obl_survive = 1;  
     
   while ( --argc && ++argv ) {
     if ( *argv[0] != '-' || strlen(*argv) != 2 ) {
