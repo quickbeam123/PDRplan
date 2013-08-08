@@ -3,6 +3,10 @@
   extern int yydebug=1;
 #endif
 
+/* increasing YYMAXDEPTH is an easy solution; using left recursing where ever possible (see below) is more imporatant, however*/
+#ifndef YYMAXDEPTH
+#define YYMAXDEPTH 100000
+#endif
 
 #include <stdio.h>
 #include <string.h> 
@@ -75,7 +79,7 @@ static char * serrmsg[] = {
 };
 
 
-void fcterr( int errno, char *par );
+/* void fcterr( int errno, char *par ); */
 
 
 static int sact_err;
@@ -144,7 +148,7 @@ static Bool sis_negated = FALSE;
 file:
 /* empty */
 |
-problem_definition  file
+file problem_definition  
 ;
 
 
@@ -189,13 +193,13 @@ OPEN_PAREN  BDOMAIN_TOK  NAME  CLOSE_PAREN
 problem_defs:
 /* empty */
 |
-objects_def  problem_defs
+problem_defs objects_def  
 |
-init_def  problem_defs
+problem_defs init_def  
 |
-goal_def  problem_defs
+problem_defs goal_def  
 |
-base_domain_name  problem_defs
+problem_defs base_domain_name  
 ;
 
 
@@ -280,18 +284,23 @@ OPEN_PAREN  AND_TOK  adl_goal_description_star  CLOSE_PAREN
   $$ = new_PlNode(AND);
   $$->sons = $3;
 }
+/* 
 |
 OPEN_PAREN  OR_TOK  adl_goal_description_star  CLOSE_PAREN
 { 
   $$ = new_PlNode(OR);
   $$->sons = $3;
 }
+*/
+/*
 |
 OPEN_PAREN  NOT_TOK  adl_goal_description  CLOSE_PAREN
 { 
   $$ = new_PlNode(NOT);
   $$->sons = $3;
 }
+*/
+/*
 |
 OPEN_PAREN  IMPLY_TOK  adl_goal_description  adl_goal_description  CLOSE_PAREN
 { 
@@ -302,16 +311,13 @@ OPEN_PAREN  IMPLY_TOK  adl_goal_description  adl_goal_description  CLOSE_PAREN
   $$ = new_PlNode(OR);
   $$->sons = np;
 }
+*/
+/*
 |
 OPEN_PAREN  EXISTS_TOK 
 OPEN_PAREN  typed_list_variable  CLOSE_PAREN 
 adl_goal_description  CLOSE_PAREN
 { 
-  /* The typed_list_variable returns a FactList with two-item TokenLists, 
-   * the first item is the variable and the second item its type.
-   * We now have to split off this FactList into a PlNode for each 
-   * variable-type TokenList. 
-   */
   FactList *tl = $4, *t1;
   PlNode *pln1;
   PlNode *pln2;
@@ -321,15 +327,11 @@ adl_goal_description  CLOSE_PAREN
   $$ = pln1;
 
   t1 = tl;
-  /* every loop gives us one quantor with one variable and its type 
-   */
   while ( t1->next ) {
     t1 = t1->next;
     
     pln2 = new_PlNode(EX);
-    pln2->atom = t1->item;
-    /* append the next quantor to the sons of the previous node 
-     */
+    pln2->atom = t1->item;    
     pln1->sons = pln2;
     pln1 = pln2;
   }
@@ -344,13 +346,13 @@ adl_goal_description  CLOSE_PAREN
   }
 
 }
+*/
+/*
 |
 OPEN_PAREN  FORALL_TOK 
 OPEN_PAREN  typed_list_variable  CLOSE_PAREN 
 adl_goal_description  CLOSE_PAREN
-{ 
-  /* This will be handled exactly like the ex-quantor case, s.a. 
-   */
+{   
   FactList *tl = $4, *t1;
   PlNode *pln1;
   PlNode *pln2;
@@ -359,9 +361,7 @@ adl_goal_description  CLOSE_PAREN
   pln1->atom = tl->item;
   $$ = pln1;
 
-  t1 = tl;
-  /* every loop gives us one quantor with one variable and its type 
-   */
+  t1 = tl;  
   while ( t1->next ) {
     t1 = t1->next;
     
@@ -381,6 +381,7 @@ adl_goal_description  CLOSE_PAREN
   }
 
 }
+*/
 ;
 
 
@@ -391,10 +392,10 @@ adl_goal_description_star:
   $$ = NULL;
 }
 |
-adl_goal_description  adl_goal_description_star
+adl_goal_description_star adl_goal_description  
 {
-  $1->next = $2;
-  $$ = $1;
+  $2->next = $1;
+  $$ = $2;
 }
 ;
 
@@ -681,10 +682,10 @@ literal_name
   $$ = $1;
 }
 |
-literal_name literal_name_plus
+literal_name_plus literal_name 
 {
-   $$ = $1;
-   $$->next = $2;
+   $$ = $2;
+   $$->next = $1;
 }
 ;
  
@@ -749,7 +750,7 @@ NAME  name_star
  * call	bison -pfct -bscan-fct scan-fct.y
  */
 void fcterr( int errno, char *par ) {
-
+/*
   sact_err = errno;
 
   if ( sact_err_par ) {
@@ -761,7 +762,7 @@ void fcterr( int errno, char *par ) {
   } else {
     sact_err_par = NULL;
   }
-
+*/
 }
 
 

@@ -3,6 +3,10 @@
   extern int yydebug=1;
 #endif
 
+/* increasing YYMAXDEPTH is an easy solution; using left recursing where ever possible (see below) is more imporatant, however*/
+#ifndef YYMAXDEPTH
+#define YYMAXDEPTH 100000
+#endif
 
 #include <stdio.h>
 #include <string.h> 
@@ -68,7 +72,7 @@ static char *serrmsg[] = {
 };
 
 
-void opserr( int errno, char *par );
+/* void opserr( int errno, char *par ); */
 
 
 static int sact_err;
@@ -161,7 +165,7 @@ int supported( char *str )
 /**********************************************************************/
 file:
 { 
-  opserr( DOMDEF_EXPECTED, NULL ); 
+  opserr( DOMDEF_EXPECTED, NULL );    
 }
 domain_definition 
 ;
@@ -174,13 +178,13 @@ OPEN_PAREN  DEFINE_TOK  domain_name
 { 
   /* initialize typetree 
    */
-  gglobal_type_tree_list = new_type_tree_list( STANDARD_TYPE );
+  gglobal_type_tree_list = new_type_tree_list( STANDARD_TYPE );   
 }
-optional_domain_defs 
+optional_domain_defs CLOSE_PAREN 
 {
   if ( gcmd_line.display_info >= 1 ) {
     printf("\ndomain '%s' defined\n", gdomain_name);
-  }
+  }    
 }
 ;
 
@@ -190,31 +194,31 @@ domain_name :
 OPEN_PAREN  DOMAIN_TOK  NAME  CLOSE_PAREN 
 { 
   gdomain_name = new_Token( strlen($3)+1 );
-  strcpy( gdomain_name, $3);
+  strcpy( gdomain_name, $3);   
 }
 ;
 
 
 /**********************************************************************/
 optional_domain_defs:
-CLOSE_PAREN  /* end of domain */
+/* empty */
 |
-require_def  optional_domain_defs
+optional_domain_defs require_def
 |
-constants_def  optional_domain_defs
+optional_domain_defs constants_def
 |
-types_def  optional_domain_defs
+optional_domain_defs types_def
 |
-action_def  optional_domain_defs
+optional_domain_defs action_def
 |
-predicates_def  optional_domain_defs
+optional_domain_defs  predicates_def
 ;
 
 
 /**********************************************************************/
 predicates_def :
 OPEN_PAREN PREDICATES_TOK  predicates_list 
-{
+{ 
 }
 CLOSE_PAREN
 { 
@@ -223,11 +227,11 @@ CLOSE_PAREN
 /**********************************************************************/
 predicates_list :
 /* empty = finished */
-{}
+{    
+}
 |
-OPEN_PAREN  NAME typed_list_variable  CLOSE_PAREN
-{
-
+predicates_list OPEN_PAREN  NAME typed_list_variable  CLOSE_PAREN
+{  
   FactList *fl, *fl1;
   TokenList *tl, *tl1;
 
@@ -244,9 +248,9 @@ OPEN_PAREN  NAME typed_list_variable  CLOSE_PAREN
   }
   tl = new_TokenList();
   fl->item = tl;
-  tl->item = new_Token( strlen( $2 ) + 1);
-  strcpy( tl->item, $2 );
-  fl1 = $3;
+  tl->item = new_Token( strlen( $3 ) + 1);
+  strcpy( tl->item, $3 );
+  fl1 = $4;
   while ( fl1 ) {
     tl1 = new_TokenList();
     tl->next = tl1;
@@ -255,10 +259,9 @@ OPEN_PAREN  NAME typed_list_variable  CLOSE_PAREN
     strcpy( tl1->item, fl1->item->next->item );
     fl1 = fl1->next;
   }
-  free_FactList( $3 );
+  free_FactList( $4 );
 
 }
-predicates_list
 ;
 
 
@@ -266,12 +269,12 @@ predicates_list
 require_def:
 OPEN_PAREN  REQUIREMENTS_TOK 
 { 
-  opserr( REQUIREM_EXPECTED, NULL ); 
+  opserr( REQUIREM_EXPECTED, NULL );    
 }
 NAME
 { 
   if ( !supported( $4 ) ) {
-    opserr( NOT_SUPPORTED, $4 );
+    opserr( NOT_SUPPORTED, $4 );    
     yyerror();
   }
 }
@@ -283,14 +286,13 @@ require_key_star  CLOSE_PAREN
 require_key_star:
 /* empty */
 |
-NAME
+require_key_star NAME
 { 
-  if ( !supported( $1 ) ) {
-    opserr( NOT_SUPPORTED, $1 );
+  if ( !supported( $2 ) ) {
+    opserr( NOT_SUPPORTED, $2 );    
     yyerror();
-  }
+  }   
 }
-require_key_star
 ;
 
 
@@ -298,7 +300,7 @@ require_key_star
 types_def:
 OPEN_PAREN  TYPES_TOK
 { 
-  opserr( TYPEDEF_EXPECTED, NULL ); 
+  opserr( TYPEDEF_EXPECTED, NULL );  
 }
 typed_list_name  CLOSE_PAREN
 { 
@@ -312,7 +314,7 @@ typed_list_name  CLOSE_PAREN
 constants_def:
 OPEN_PAREN  CONSTANTS_TOK
 { 
-  opserr( CONSTLIST_EXPECTED, NULL ); 
+  opserr( CONSTLIST_EXPECTED, NULL );    
 }
 typed_list_name  CLOSE_PAREN
 { 
@@ -327,14 +329,14 @@ typed_list_name  CLOSE_PAREN
 action_def:
 OPEN_PAREN  ACTION_TOK  
 { 
-  opserr( ACTION, NULL ); 
+  opserr( ACTION, NULL );    
 }  
 NAME
-{ 
-  scur_op = new_PlOperator( $4 );
+{    
+  scur_op = new_PlOperator( $4 );     
 }
 param_def  action_def_body  CLOSE_PAREN
-{
+{  
   scur_op->next = gloaded_ops;
   gloaded_ops = scur_op; 
 }
@@ -349,14 +351,14 @@ param_def:
 }
 |
 PARAMETERS_TOK  OPEN_PAREN  typed_list_variable  CLOSE_PAREN
-{
+{  
   FactList *f;
   scur_op->params = $3;
   for (f = scur_op->params; f; f = f->next) {
     /* to be able to distinguish params from :VARS 
      */
     scur_op->number_of_real_params++;
-  }
+  }  
 }
 ;
 
@@ -364,10 +366,10 @@ PARAMETERS_TOK  OPEN_PAREN  typed_list_variable  CLOSE_PAREN
 action_def_body:
 /* empty */
 |
-VARS_TOK  OPEN_PAREN  typed_list_variable  CLOSE_PAREN  action_def_body
+action_def_body VARS_TOK  OPEN_PAREN  typed_list_variable  CLOSE_PAREN  
 {
   FactList *f = NULL;
-
+   
   /* add vars as parameters 
    */
   if ( scur_op->params ) {
@@ -375,24 +377,22 @@ VARS_TOK  OPEN_PAREN  typed_list_variable  CLOSE_PAREN  action_def_body
       /* empty, get to the end of list 
        */
     }
-    f->next = $3;
+    f->next = $4;
     f = f->next;
   } else {
-    scur_op->params = $3;
+    scur_op->params = $4;
   }
 }
 |
-PRECONDITION_TOK  adl_goal_description
-{ 
-  scur_op->preconds = $2; 
+action_def_body PRECONDITION_TOK  adl_goal_description
+{   
+  scur_op->preconds = $3;    
 }
-action_def_body
 |
-EFFECT_TOK  adl_effect
-{ 
-  scur_op->effects = $2; 
+action_def_body EFFECT_TOK  adl_effect
+{   
+  scur_op->effects = $3; 
 }
-action_def_body
 ;
 
 
@@ -404,7 +404,7 @@ action_def_body
  **********************************************************************/
 adl_goal_description:
 literal_term
-{ 
+{   
   if ( sis_negated ) {
     $$ = new_PlNode(NOT);
     $$->sons = new_PlNode(ATOM);
@@ -417,22 +417,27 @@ literal_term
 }
 |
 OPEN_PAREN  AND_TOK  adl_goal_description_star  CLOSE_PAREN
-{ 
+{   
   $$ = new_PlNode(AND);
   $$->sons = $3;
 }
+/*
 |
 OPEN_PAREN  OR_TOK  adl_goal_description_star  CLOSE_PAREN
 { 
   $$ = new_PlNode(OR);
   $$->sons = $3;
 }
+*/
+/*
 |
 OPEN_PAREN  NOT_TOK  adl_goal_description  CLOSE_PAREN
 { 
   $$ = new_PlNode(NOT);
   $$->sons = $3;
 }
+*/
+/*
 |
 OPEN_PAREN  IMPLY_TOK  adl_goal_description  adl_goal_description  CLOSE_PAREN
 { 
@@ -443,16 +448,13 @@ OPEN_PAREN  IMPLY_TOK  adl_goal_description  adl_goal_description  CLOSE_PAREN
   $$ = new_PlNode(OR);
   $$->sons = np;
 }
+*/
+/*
 |
 OPEN_PAREN  EXISTS_TOK 
 OPEN_PAREN  typed_list_variable  CLOSE_PAREN 
 adl_goal_description  CLOSE_PAREN
 { 
-  /* The typed_list_variable returns a FactList with two-item TokenLists, 
-   * the first item is the variable and the second item its type.
-   * We now have to split off this FactList into a PlNode for each 
-   * variable-type TokenList. 
-   */
   FactList *tl = $4, *t1;
   PlNode *pln1;
   PlNode *pln2;
@@ -462,15 +464,11 @@ adl_goal_description  CLOSE_PAREN
   $$ = pln1;
 
   t1 = tl;
-  /* every loop gives us one quantor with one variable and its type 
-   */
   while ( t1->next ) {
     t1 = t1->next;
 
     pln2 = new_PlNode(EX);
     pln2->atom = t1->item;
-    /* append the next quantor to the sons of the previous node 
-     */
     pln1->sons = pln2;
     pln1 = pln2;
   }
@@ -485,13 +483,13 @@ adl_goal_description  CLOSE_PAREN
   }
 
 }
+*/
+/*
 |
 OPEN_PAREN  FORALL_TOK 
 OPEN_PAREN  typed_list_variable  CLOSE_PAREN 
 adl_goal_description  CLOSE_PAREN
 { 
-  /* This will be handled exactly like the ex-quantor case, s.a. 
-   */
   FactList *tl = $4, *t1;
   PlNode *pln1;
   PlNode *pln2;
@@ -500,9 +498,7 @@ adl_goal_description  CLOSE_PAREN
   pln1->atom = tl->item;
   $$ = pln1;
 
-  t1 = tl;
-  /* every loop gives us one quantor with one variable and its type 
-   */
+  t1 = tl;  
   while ( t1->next ) {
     t1 = t1->next;
       
@@ -522,20 +518,21 @@ adl_goal_description  CLOSE_PAREN
   }
 
 }
+*/
 ;
 
 
 /**********************************************************************/
 adl_goal_description_star:
 /* empty */
-{
+{  
   $$ = NULL;
 }
 |
-adl_goal_description  adl_goal_description_star
-{
-  $1->next = $2;
-  $$ = $1;
+adl_goal_description_star adl_goal_description  
+{   
+  $2->next = $1;
+  $$ = $2;
 }
 ;
 
@@ -547,7 +544,7 @@ adl_goal_description  adl_goal_description_star
  *********************************************************************/
 adl_effect:
 literal_term
-{ 
+{   
   if ( sis_negated ) {
     $$ = new_PlNode(NOT);
     $$->sons = new_PlNode(ATOM);
@@ -560,23 +557,24 @@ literal_term
 }
 |
 OPEN_PAREN  AND_TOK  adl_effect_star  CLOSE_PAREN
-{ 
+{   
   $$ = new_PlNode(AND);
   $$->sons = $3;
 }
+/*
 |
 OPEN_PAREN  NOT_TOK  adl_effect  CLOSE_PAREN
 { 
   $$ = new_PlNode(NOT);
   $$->sons = $3;
 }
+*/
+/*
 |
 OPEN_PAREN  FORALL_TOK 
 OPEN_PAREN  typed_list_variable  CLOSE_PAREN 
 adl_effect  CLOSE_PAREN
 { 
-  /* This will be handled exactly like quantors in the goals part, s.o. 
-   */
   FactList *fl = $4, *f1;
   PlNode *pln1;
   PlNode *pln2;
@@ -586,8 +584,6 @@ adl_effect  CLOSE_PAREN
   $$ = pln1;
 
   f1 = fl;
-  /* every loop gives us one quantor with one variable and its type 
-   */
   while ( f1->next ) {
     f1 = f1->next;
     
@@ -607,34 +603,29 @@ adl_effect  CLOSE_PAREN
   }
 
 }
+*/
+/*
 |
 OPEN_PAREN  WHEN_TOK  adl_goal_description  adl_effect  CLOSE_PAREN
 {
-  /* This will be conditional effects in FF representation, but here
-   * a formula like (WHEN p q) will be saved as:
-   *  [WHEN]
-   *  [sons]
-   *   /  \
-   * [p]  [q]
-   * That means, the first son is p, and the second one is q. 
-   */
   $$ = new_PlNode(WHEN);
   $3->next = $4;
   $$->sons = $3;
 }
+*/
 ;
 
 
 /**********************************************************************/
 adl_effect_star:
 { 
-  $$ = NULL; 
+  $$ = NULL;    
 }
 |
-adl_effect  adl_effect_star
-{
-  $1->next = $2;
-  $$ = $1;
+adl_effect_star adl_effect  
+{  
+  $2->next = $1;
+  $$ = $2;
 }
 ;
 
@@ -644,13 +635,13 @@ adl_effect  adl_effect_star
  **********************************************************************/
 literal_term:
 OPEN_PAREN  NOT_TOK  atomic_formula_term  CLOSE_PAREN
-{ 
+{   
   $$ = $3;
   sis_negated = TRUE;
 }
 |
 atomic_formula_term
-{
+{  
   $$ = $1;
 }
 ;
@@ -941,7 +932,7 @@ VARIABLE  typed_list_variable    /* a list element (gets type from next one) */
 void opserr( int errno, char *par )
 
 {
-
+/*
   sact_err = errno;
 
   if ( sact_err_par ) {
@@ -953,7 +944,7 @@ void opserr( int errno, char *par )
   } else {
     sact_err_par = NULL;
   }
-
+*/
 }
   
 
