@@ -165,26 +165,26 @@ extern "C"
 
 
 
-#define MAX_CONSTANTS 2000
-#define MAX_PREDICATES 2400
+#define MAX_CONSTANTS 2500    /* MS: increased from 2000 */
+#define MAX_PREDICATES 4400   /* MS: increased from 2400 */
 #define MAX_TYPES 50
 #define MAX_ARITY 5
 #define MAX_VARS 15
 
 
-#define MAX_TYPE 2000
+#define MAX_TYPE 2500         /* MS: increased from 2000 */
 
 
-#define MAX_INITIAL 5000
+#define MAX_INITIAL 50000     /* MS: increased from 5000 */
 
 
-#define MAX_OPERATORS 12800
+#define MAX_OPERATORS 105000  /* MS: increased from 12800 */
 
 
 #define MAX_TYPE_INTERSECTIONS 10
 
 
-#define MAX_RELEVANT_FACTS 10000/* i think this is VERY generous... */
+#define MAX_RELEVANT_FACTS 100000 /* i think this is VERY generous... */ /* MS: increased from 10000*/
 
 
 
@@ -204,9 +204,9 @@ extern "C"
 
 
 
-#define MAX_OP_P 80
+#define MAX_OP_P 320    /* MS: increased from 80 */
 #define MAX_OP_A 40
-#define MAX_OP_D 320
+#define MAX_OP_D 420    /* MS: increased from 320 */
 
 
 
@@ -215,7 +215,7 @@ extern "C"
 #define MAX_PLAN_LENGTH 2000
 
 
-#define MAX_STATE 6400
+#define MAX_STATE 10000 /*MS: increased from 6400*/
 
 
 #define MAX_SPACE 150000
