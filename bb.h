@@ -371,8 +371,30 @@ struct _command_line {
   int prune;
   int timeOut;
   int binary_clause_only;
+  
+  /* MS: */
+  int phaselim;   
+  int pphase;
+  int oblig_prior_stack;
+  int minimize;
+  int spawnallstates;
+  int obl_subsumption;
+  int cla_subsumption;
+  
+  int obl_survive;
+  
+  int just_translate;  
+  int just_dumpgrounded;
+  
+  int gen_invariant;  
+  int reverse;
+  
+  int quick_reason;
+  
+  int noop_from_current;
+  
+  int resched;
 };
-
 
 typedef char *Token;
 

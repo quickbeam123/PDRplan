@@ -45,7 +45,10 @@ SOURCES = main.c \
 	graph.c \
 	cnfout.c
 
-CPP_SOURCES = Main.cpp
+CPP_SOURCES = Main.cpp \
+	Common.cpp \
+	Translate.cpp \
+	Invariant.cpp
                 
 OBJECTS = $(SOURCES:.c=.o)
 

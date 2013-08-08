@@ -338,6 +338,46 @@ void print_FactToFile( int index, FILE* fp )
 
 }
 
+void print_GroundedFactToFile( int index, FILE* fp )
+
+{
+	
+  Fact* f = &(grelevant_facts[index]);
+
+  int j;
+
+  if ( f->predicate == -1 ) {
+    fprintf(fp, "=(");
+    for ( j=0; j<2; j++ ) {
+      if ( f->args[j] >= 0 ) {
+	fprintf(fp, "%s", gconstants[(f->args)[j]]);
+      } else {
+	fprintf(fp, "x%d", DECODE_VAR( f->args[j] ));
+      }
+      if ( j < 1) {
+	fprintf(fp, " ");
+      }
+    }
+    fprintf(fp, ")");
+    return;
+  }
+    
+  fprintf(fp, "(x%s-", gpredicates[f->predicate]);
+  for ( j=0; j<garity[f->predicate]; j++ ) {
+    if ( f->args[j] >= 0 ) {
+      fprintf(fp, "%s", gconstants[(f->args)[j]]);
+    } else {
+      fprintf(fp, "x%d", DECODE_VAR( f->args[j] ));
+    }
+    if ( j < garity[f->predicate] - 1 ) {
+      fprintf(fp, "-");
+    }
+  }
+  fprintf(fp, ")");
+
+}
+
+
 
 
 void print_ft_name( int index )

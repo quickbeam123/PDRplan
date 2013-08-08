@@ -32,6 +32,10 @@
 #ifndef _OUTPUT_H
 #define _OUTPUT_H
 
+#ifdef __cplusplus
+extern "C"
+{
+#endif
 
 
 void print_FactList( FactList *list, char *sepf, char *sept );
@@ -44,6 +48,7 @@ void print_plops( PlOperator *plop );
 
 void print_Fact( Fact *f );
 void print_FactToFile( int index, FILE* fp );
+void print_GroundedFactToFile( int index, FILE* fp );
 void print_ft_name( int index );
 void print_op_name( int index );
 void print_op_nameToFile( int index, FILE* fp );
@@ -58,5 +63,8 @@ void print_BitVector( BitVector *vec, int vec_len );
 
 void print_plan( void );
 
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _OUTPUT_H */

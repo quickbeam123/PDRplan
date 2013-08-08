@@ -4,3 +4,8 @@ scan-fct_pddl.tab.c
 scan-ops_pddl.tab.c
 *.o
 pdr
+*.pddl
+*.pddl.soln
+valgrind.supp
+.kdbgrc.pdr
+callgrind.out.*

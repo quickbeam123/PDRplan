@@ -584,8 +584,7 @@ int main_orig( int argc, char *argv[] )
 
   /* start parse & instantiation timing
    */
-  times( &start );
-  times( &gstart );
+  times( &start );  
   /* domain file (ops)
    */
   if ( gcmd_line.display_info >= 1 ) {
@@ -761,26 +760,29 @@ void bb_usage( void )
   printf("-o <str>    operator file name\n");
   printf("-f <str>    fact file name\n\n");
 
-  printf("-l  <num>   goal layer for CNF\n\n");
+  printf("-l <num>    Limit the number of phases (may return UNRESOLVED)\n");
+    
+  printf("-h <0 or 1> Print phase\n");
+  
+  printf("-b <0 or 1> Obligations handled 0 - queuewise (typically shorter plans), 1 - stackwise (more succesfull to find a plan at all)\n");
+  printf("-e <0 or 2> Rescheduling obligations (when set to 0, produces optimal length plans).\n");  
+  printf("-S <0 or 2> Obligations survive between phases (with 2 there is just one obligation at all times -> incomplete).\n");
+  
+  printf("-m <0 .. 2> Clause minimazation 0 - off, 1 - on, 2 - try producing two clauses\n");
+  printf("-s <0 or 2> Subsume obligations by newly derived clauses\n");
+  printf("-c <0 .. 2> Clause subsumption 0 -off, 1 - on, 2 - with clause pushing; (may detect UNSAT)\n");
+  printf("-a <0 or 1> Extend (positively) in all possible ways\n");
+     
+  printf("-t <0 .. 2> Translate to spec file [1 - linear encoding, 2 - parallel encoding] written to stdout and finish.\n");
+  printf("-d <0 or 1> Dump a grounded version of the input in to operator.pddl and facts.pddl files, respectively, and finish.\n");
 
-  printf("-G <0 or 1> (0) create CNF output or (1) build final solution\n");
-  printf("-b <str>    CNF output file name\n");
-  printf("-t <0 or 1> (1) CNF output includes only unary/binary clauses - others ignored\n");
-  printf("-S <str>    Input Solution File Name (only when -G 1 is used)\n");
-  printf("-F <str>    Final Output Solution File Name (only when -G 1 is used)\n");
-  printf("-V <str>    Variables File Name - list all variables (only when -G 1 is used)\n");
+  printf("-v <0 or 1> Generate invariant unit and binary clauses before the search starts.\n");  
+  printf("-r <0 or 1> Reverse - backward search for plan\n");
+      
+  printf("-q <0 or 2> Quick (but coarse) reason clause generation: 0 - test all, 1 - test only plausible, 2 - test also interesting.\n");
 
-  printf("-C          CNF formula output (preset: %d); at layer <-l>\n",
-	 gcmd_line.cnfout);
-  printf("      0     none\n");
-  printf("      1     action-based\n");
-  printf("      2     gp-style action-based\n");
-  printf("      3     gp-based\n");
-  printf("      4     thin gp-based\n\n");
-
-
-
-
+  printf("-x <0 or 1> Experimental - no-op reasons from the current layer (and not from the goal layer).\n");
+  
   return;
 
   printf("-i <num>    run-time information level( preset: 1 )\n");
@@ -808,9 +810,8 @@ void bb_usage( void )
 Bool process_command_line( int argc, char *argv[] )
 
 {
-
+  int  gen_inv_set;
   char option;
-
 
   gcmd_line.display_info = 1;
   gcmd_line.debug = 0;
@@ -819,7 +820,29 @@ Bool process_command_line( int argc, char *argv[] )
   memset(gcmd_line.ops_file_name, 0, MAX_LENGTH);
   memset(gcmd_line.fct_file_name, 0, MAX_LENGTH);
   memset(gcmd_line.path, 0, MAX_LENGTH);
-
+  
+  gcmd_line.phaselim = 0;
+  gcmd_line.pphase = 0;
+  gcmd_line.oblig_prior_stack = 1;
+  gcmd_line.minimize = 1;
+  gcmd_line.spawnallstates = 0;
+  gcmd_line.obl_subsumption = 1;
+  gcmd_line.cla_subsumption = 1;
+  
+  gcmd_line.just_translate = 0;
+  gcmd_line.just_dumpgrounded = 0;
+  
+  gen_inv_set = 0;
+  gcmd_line.gen_invariant = 0;  
+  gcmd_line.reverse = 0;
+  
+  gcmd_line.quick_reason = 1;  
+  gcmd_line.noop_from_current = 1;  
+  
+  gcmd_line.resched = 2;
+  
+  gcmd_line.obl_survive = 0;  
+    
   while ( --argc && ++argv ) {
     if ( *argv[0] != '-' || strlen(*argv) != 2 ) {
 	return FALSE;
@@ -838,49 +861,58 @@ Bool process_command_line( int argc, char *argv[] )
 	case 'f':
 	  strncpy( gcmd_line.fct_file_name, *argv, MAX_LENGTH );
 	  break;
-	case 'i':
-	  sscanf( *argv, "%d", &gcmd_line.display_info );
-	  break;
-	case 'd':
-	  sscanf( *argv, "%d", &gcmd_line.debug );
+
+  case 'i':
+    sscanf( *argv, "%d", &gcmd_line.display_info );
+    break;
+        
+	case 'l':
+	  sscanf( *argv, "%d", &gcmd_line.phaselim );
+	  break;          
+  case 'h':
+	  sscanf( *argv, "%d", &gcmd_line.pphase );
+	  break;              
+	case 'b':
+	  sscanf( *argv, "%d", &gcmd_line.oblig_prior_stack );
 	  break;
 	case 'm':
-	  sscanf( *argv, "%d", &gcmd_line.min_time );
+	  sscanf( *argv, "%d", &gcmd_line.minimize );
 	  break;
-	case 'l':
-	  sscanf( *argv, "%d", &gcmd_line.cnflayer );
+  case 's':
+	  sscanf( *argv, "%d", &gcmd_line.obl_subsumption );
+	  break;  
+  case 'S':
+	  sscanf( *argv, "%d", &gcmd_line.obl_survive );
+	  break;  
+  case 'c':
+	  sscanf( *argv, "%d", &gcmd_line.cla_subsumption );
 	  break;
-	case 'C':
-	  sscanf( *argv, "%d", &gcmd_line.cnfout );
+  case 'a':
+	  sscanf( *argv, "%d", &gcmd_line.spawnallstates );
+	  break;   
+  case 't':
+	  sscanf( *argv, "%d", &gcmd_line.just_translate );
+	  break;     
+  case 'd':
+	  sscanf( *argv, "%d", &gcmd_line.just_dumpgrounded );
+	  break;   
+	case 'v':
+	  sscanf( *argv, "%d", &gcmd_line.gen_invariant );
+    gen_inv_set = 1;
+	  break;    
+	case 'r':
+	  sscanf( *argv, "%d", &gcmd_line.reverse );
 	  break;
-	case 's':
-	  gcmd_line.solverOut = TRUE;
-	  ++argc;
-	  --argv;
+  case 'q':
+	  sscanf( *argv, "%d", &gcmd_line.quick_reason );
 	  break;
-        case 't':
-          sscanf( *argv, "%d", &gcmd_line.binary_clause_only);
-          break;
-	case 'P':
-	  gcmd_line.prune = TRUE;
-	  ++argc;
-	  --argv;
-	  break;
-        case 'b':
-          strncpy( gcmd_line.cnfFileName, *argv, MAX_LENGTH );
-          break;
-        case 'G':
-          sscanf( *argv, "%d", &gcmd_line.makeCNF );
-          break;
-        case 'S':
-	  strncpy( gcmd_line.input_solution, *argv, MAX_LENGTH );
-	  break;
-        case 'F':
-	  strncpy( gcmd_line.final_solution, *argv, MAX_LENGTH );
-	  break;
-        case 'V':
-	  strncpy( gcmd_line.varFileName, *argv, MAX_LENGTH );
-          break;
+  case 'x':
+	  sscanf( *argv, "%d", &gcmd_line.noop_from_current );
+	  break;    
+  case 'e':
+	  sscanf( *argv, "%d", &gcmd_line.resched );
+	  break;  
+  
 	default:
 	  printf( "\nbb: unknown option: %c entered\n\n", option );
 	  return FALSE;
@@ -897,7 +929,10 @@ Bool process_command_line( int argc, char *argv[] )
     return FALSE;
   }
   */
-       
+
+  if (!gen_inv_set && gcmd_line.reverse) {
+    gcmd_line.gen_invariant = 1;
+  }
 
   return TRUE;
 
