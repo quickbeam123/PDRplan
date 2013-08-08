@@ -3,7 +3,7 @@
 #include "parse.h"
 
 /* default yywrap function - always treat EOF as an EOF  */
-#define ops_pddlwrap() 1 
+int ops_pddlwrap() { return 1; };
 
 %}
 
@@ -44,15 +44,9 @@ z [Zz]
 
 "-"  {  return('-'); }
 
-"("[ \t]*{i}{n}"-"{p}{a}{c}{k}{a}{g}{e}  {  gbracket_count = 1;
- BEGIN OVERREAD; }
-
 {d}{e}{f}{i}{n}{e}  {  return(DEFINE_TOK); }
 
 {d}{o}{m}{a}{i}{n}  {  return(DOMAIN_TOK); }
-
-"("[ \t]*":"{e}{x}{t}{e}{n}{d}{s}  {  gbracket_count = 1;
- BEGIN OVERREAD; }
 
 ":"{r}{e}{q}{u}{i}{r}{e}{m}{e}{n}{t}{s}  {  return(REQUIREMENTS_TOK); }
 
@@ -60,13 +54,7 @@ z [Zz]
 
 ":"{c}{o}{n}{s}{t}{a}{n}{t}{s}  {  return(CONSTANTS_TOK); }
 
-"("[ \t]*":"{d}{o}{m}{a}{i}{n}"-"{v}{a}{r}{i}{a}{b}{l}{e}{s}  {  gbracket_count = 1;
- BEGIN OVERREAD; } 
-
 ":"{p}{r}{e}{d}{i}{c}{a}{t}{e}{s}  { return(PREDICATES_TOK); }
-
-"("[ \t]*":"{t}{i}{m}{e}{l}{e}{s}{s} {  gbracket_count = 1;
- BEGIN OVERREAD; }
 
 ":"{a}{c}{t}{i}{o}{n}  {  return(ACTION_TOK); }
 

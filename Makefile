@@ -86,8 +86,7 @@ lex.ops_pddl.c: lex-ops_pddl.l
 # misc
 clean:
 	rm -f pdr *.o *.bak *~ *% core *_pure_p9_c0_400.o.warnings \
-        \#*\# $(RES_PARSER_SRC)
-##$(PDDL_PARSER_SRC)
+        \#*\# $(RES_PARSER_SRC) $(PDDL_PARSER_SRC)
 
 veryclean: clean
 	rm -f pdr *.symbex gmon.out \

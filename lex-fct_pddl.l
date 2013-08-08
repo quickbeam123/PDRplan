@@ -3,7 +3,7 @@
 #include "parse.h"
   
   /* default yywrap function - always treat EOF as an EOF  */
-#define fct_pddlwrap() 1 
+int fct_pddlwrap() { return 1; };
 
 int gbracket_count = 0;
 
