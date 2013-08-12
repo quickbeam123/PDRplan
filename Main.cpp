@@ -202,6 +202,8 @@ struct SolvingContext {
   vector< Obligations > obligations;  // size == phase
   Obligations obl_grave;
   
+  size_t best_plan_so_far;
+  
   // statistics
   size_t oblig_processed;  
   size_t oblig_sat;  
@@ -469,7 +471,7 @@ struct SolvingContext {
     CompareActionScores(vector<Action *> & acts) : actions(acts) {}
   };
   
-  char extend(size_t layer_idx, BoolState const & state, bool pushTest, bool chat = false) {           
+  char extend(size_t layer_idx, BoolState const & state, bool pushTest, bool try_side, bool chat = false) {           
     // will be set to a non-null action before returning result > 0  
     extend_action_out = NULL;
             
@@ -641,7 +643,7 @@ struct SolvingContext {
       else
         a->score = (int)buffer.num_clauses;
            
-      can_do_side = (gcmd_line.resched == 2) && !failed_precond && (false_after < best_false_after);
+      can_do_side = try_side && !failed_precond && (false_after < best_false_after);
       just_because_side = false;            
             
       if ( plausible ||                                         // normally, only if the action still seems ok, we perform the full test
@@ -762,7 +764,7 @@ struct SolvingContext {
       return 0;      
     
     // finishing the "side" trick
-    if (gcmd_line.resched == 2 && best_action != 0) {      
+    if (try_side && best_action != 0) {    
       extend_action_out = best_action;
       // printf("SIDE (%d)\n",best_false_after);
       // printAction(stdout,extend_action_out);
@@ -1233,6 +1235,14 @@ struct SolvingContext {
         obligations[obl_top].pop_front();           
       }
       
+      // printf("Next obligation; depth %zu at index %zu\n",obl->depth,obl_top+1);
+      
+      if (obl->depth+obl_top+1 >= best_plan_so_far) {
+        // printf("Discarded\n");
+        delete obl;
+        continue;
+      }
+      
       // printf("Handling obligation with depth %zu and state of size %zu\n",obl->depth,obl->state.size());
       oblig_processed++;
       
@@ -1245,7 +1255,7 @@ struct SolvingContext {
       times(&start);
       
       char res;      
-      if ((res = extend(obl_top,obl->state,false))) { 
+      if ((res = extend(obl_top,obl->state,false,(gcmd_line.resched == 2 && obl->depth+obl_top+2 < best_plan_so_far)))) { 
         times(&end);
         TIME( time_extend_sat );
       
@@ -1275,7 +1285,12 @@ struct SolvingContext {
             obligations[obl_top].push_back(new_obl);    
           } else {
             if (obl_top == 0) {
-              printf("SAT: plan of length %zu found\n",new_obl->depth);
+              times(&end);
+            
+              printf("SAT: plan of length %zu found after %7.2f seconds\n",new_obl->depth,
+                ( float ) ( ( end.tms_utime - gstart.tms_utime + end.tms_stime - gstart.tms_stime  ) / 100.0 ));               
+              
+              best_plan_so_far = new_obl->depth;
               
               string filename;
               filename += gcmd_line.path;
@@ -1291,18 +1306,17 @@ struct SolvingContext {
               }
               
               delete new_obl;         
-              return true;
-            }
-          
-            obligations[obl_top-1].push_back(new_obl);
-          }        
+              // return true;
+            } else          
+              obligations[obl_top-1].push_back(new_obl);
+          }     
         }
         
         if (res > 1) 
           ;
-        else
+        else if (obl_top) // there is space to go fwd (otherwise, we just generated a plan)
           obl_top--; // going forward with the new guy(s)
-             
+          
       } else {
         oblig_unsat++;        
         
@@ -1381,7 +1395,7 @@ struct SolvingContext {
         
         // printf("Trying clause from layer %zu: ",idx); printClauseNice(clbox->data);
         
-        if (extend(idx,pushState,true)) { // SAT -> not pushed
+        if (extend(idx,pushState,true,false)) { // SAT -> not pushed
           layers_delta[idx][j++] = clbox;
         } else {       
           // printf("Pushing clause from layer %zu: ",idx); printClauseNice(clbox->data);
@@ -1493,8 +1507,10 @@ struct SolvingContext {
       printf("UNSAT: initial state doesn't satisfy the backward invariant!\n");
       return;
     }   
-        
-    for (phase = 1 ;; phase++) {    
+    
+    best_plan_so_far = (size_t)-1; // the maximal representable value
+    
+    for (phase = 1 ;; phase++) {  
       if (gcmd_line.pphase == 1)
         printf("Phase %zu\n",phase);        
     
@@ -1531,6 +1547,11 @@ struct SolvingContext {
       
       if (result)
         return;
+      
+      if (phase >= best_plan_so_far) {
+        printf("OPTIMUM REACHED!\n");
+        return;
+      }
       
       // extending for the next phase, so that pushing can fill the new layer
       layers_delta.push_back(Clauses());
