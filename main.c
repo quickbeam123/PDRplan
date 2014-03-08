@@ -768,10 +768,9 @@ void bb_usage( void )
   printf("-e <0 .. 2> Rescheduling obligations (when set to 0, produces optimal length plans).\n");  
   printf("-S <0 .. 2> Obligations survive between phases (with 2 there is just one obligation at all times -> incomplete).\n");
   
-  printf("-m <0 .. 2> Clause minimazation 0 - off, 1 - on, 2 - try producing two clauses\n");
+  printf("-m <0 .. 2> Clause minimazation 0 - off, 1 - on, 2 - inductive (one pass), 3 - inductive (till fixpoint)\n");
   printf("-s <0 .. 2> Subsume obligations by newly derived clauses (2 = put those that go 'off the rim' to the grave)\n");
   printf("-c <0 .. 2> Clause subsumption 0 -off, 1 - on, 2 - with clause pushing; (may detect UNSAT)\n");
-  printf("-a <0 or 1> Extend (positively) in all possible ways\n");
      
   printf("-t <0 .. 2> Translate to spec file [1 - linear encoding, 2 - parallel encoding] written to stdout and finish.\n");
   printf("-d <0 or 1> Dump a grounded version of the input in to operator.pddl and facts.pddl files, respectively, and finish.\n");
@@ -780,8 +779,6 @@ void bb_usage( void )
   printf("-r <0 or 1> Reverse - backward search for plan\n");
       
   printf("-q <0 .. 2> Quick (but coarse) reason clause generation: 0 - test all, 1 - test only plausible, 2 - test also interesting.\n");
-
-  printf("-x <0 or 1> Experimental - no-op reasons from the current layer (and not from the goal layer).\n");
   
   return;
 
@@ -825,7 +822,6 @@ Bool process_command_line( int argc, char *argv[] )
   gcmd_line.pphase = 0;
   gcmd_line.oblig_prior_stack = 1;
   gcmd_line.minimize = 1;
-  gcmd_line.spawnallstates = 0;
   gcmd_line.obl_subsumption = 1;
   gcmd_line.cla_subsumption = 1;
   
@@ -837,8 +833,7 @@ Bool process_command_line( int argc, char *argv[] )
   gcmd_line.reverse = 0;
   
   gcmd_line.quick_reason = 1;  
-  gcmd_line.noop_from_current = 1;  
-  
+
   gcmd_line.resched = 2;
   
   gcmd_line.obl_survive = 1;  
@@ -887,9 +882,6 @@ Bool process_command_line( int argc, char *argv[] )
   case 'c':
 	  sscanf( *argv, "%d", &gcmd_line.cla_subsumption );
 	  break;
-  case 'a':
-	  sscanf( *argv, "%d", &gcmd_line.spawnallstates );
-	  break;   
   case 't':
 	  sscanf( *argv, "%d", &gcmd_line.just_translate );
 	  break;     
@@ -906,9 +898,6 @@ Bool process_command_line( int argc, char *argv[] )
   case 'q':
 	  sscanf( *argv, "%d", &gcmd_line.quick_reason );
 	  break;
-  case 'x':
-	  sscanf( *argv, "%d", &gcmd_line.noop_from_current );
-	  break;    
   case 'e':
 	  sscanf( *argv, "%d", &gcmd_line.resched );
 	  break;  
