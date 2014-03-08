@@ -18,7 +18,8 @@ CFLAGS	= -O6 -Wall -ansi $(TYPE) $(ADDONS) -g
 
 LIBS    = -lm
 
-CPP     = g++
+# a workaround to problems with g++-4.7 which errors with "'_exit' was not declared in this scope"
+CPP     = g++-4.4  
 
 CPPFLAGS = -O6 -Wall -ansi -g
 #-static

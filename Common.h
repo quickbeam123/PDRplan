@@ -38,6 +38,7 @@ int getDel(Action* a, int i);
 
 bool subsumes(Clause const &c1, Clause const &c2); // assumed sorted
 bool clauseUnsatisfied(Clause const &cl, BoolState const &st);
+bool actionApplicable(BoolState &state, Action* a);
 void applyActionEffects(BoolState &state, Action* a);
 
 void printClause(Clause const & clause);

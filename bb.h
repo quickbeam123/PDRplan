@@ -377,7 +377,6 @@ struct _command_line {
   int pphase;
   int oblig_prior_stack;
   int minimize;
-  int spawnallstates;
   int obl_subsumption;
   int cla_subsumption;
   
@@ -391,9 +390,9 @@ struct _command_line {
   
   int quick_reason;
   
-  int noop_from_current;
-  
   int resched;
+  
+  int postprocess;
 };
 
 typedef char *Token;
@@ -624,6 +623,7 @@ typedef struct _Action {
 
   /* MS */
   int score;
+  char interesting;
 } Action;
   
 

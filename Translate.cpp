@@ -37,23 +37,23 @@ static int encodeActions(bool print, FILE* outfile) {
 
   for (Action* a = gactions; a; a = a->next) { 
     // preconds    
-    for (int i = 0; i < a->num_preconds; i++) {
+    for (int i = 0; i < numPreconds(a); i++) {
       if (print) {
-        fprintf(outfile,"%d %d 0\n",-actvar,a->preconds[i]+1);
+        fprintf(outfile,"%d %d 0\n",-actvar,getPrecond(a,i)+1);
       }
       numcl++;
     }
     // adds       
-    for (int i = 0; i < a->num_adds; i++) {
+    for (int i = 0; i < numAdds(a); i++) {
       if (print) {
-        fprintf(outfile,"%d %d 0\n",-actvar,(gnum_relevant_facts+gnum_actions+a->adds[i]+1));
+        fprintf(outfile,"%d %d 0\n",-actvar,(gnum_relevant_facts+gnum_actions+getAdd(a,i)+1));
       }
       numcl++;
     }
     // dels
-    for (int i = 0; i < a->num_dels; i++) {
+    for (int i = 0; i < numDels(a); i++) {
       if (print) {
-        fprintf(outfile,"%d %d 0\n",-actvar,-(gnum_relevant_facts+gnum_actions+a->dels[i]+1));
+        fprintf(outfile,"%d %d 0\n",-actvar,-(gnum_relevant_facts+gnum_actions+getDel(a,i)+1));
       }
       numcl++;
     }
@@ -64,18 +64,18 @@ static int encodeActions(bool print, FILE* outfile) {
 }
 
 static bool actionPreservesFact(Action* a, int fact) {
-  for (int i = 0; i < a->num_adds; i++)
-    if (a->adds[i] == fact)
+  for (int i = 0; i < numAdds(a); i++)
+    if (getAdd(a,i) == fact)
       return false;
       
-  for (int i = 0; i < a->num_dels; i++)
-    if (a->dels[i] == fact)
+  for (int i = 0; i < numDels(a); i++)
+    if (getDel(a,i) == fact)
       return false;
       
   return true;
 }
 
-static int linearEncoding(bool print, FILE* outfile) {  
+static int sequentialEncoding(bool print, FILE* outfile) {  
   int numcl = 0;  
   int actvar;
   
@@ -91,7 +91,7 @@ static int linearEncoding(bool print, FILE* outfile) {
   // precond and effect
   numcl += encodeActions(print,outfile);
   
-  // explicit frame   
+  // classical frame   
   actvar = gnum_relevant_facts+1;
   for (Action* a = gactions; a; a = a->next) {          
     for (int i = 0; i < gnum_relevant_facts; i++)
@@ -109,13 +109,13 @@ static int linearEncoding(bool print, FILE* outfile) {
 }
 
 static bool actionDeletesPreOrAdd(Action *a, Action *b) {
-  for (int i = 0; i < a->num_dels; i++) {
-    for (int j = 0; j < b->num_preconds; j++)
-      if (a->dels[i] == b->preconds[j])
+  for (int i = 0; i < numDels(a); i++) {
+    for (int j = 0; j < numPreconds(b); j++)
+      if (getDel(a,i) == getPrecond(b,j))
         return true;
   
-    for (int j = 0; j < b->num_adds; j++)
-      if (a->dels[i] == b->adds[j])
+    for (int j = 0; j < numAdds(b); j++)
+      if (getDel(a,i) == getAdd(b,j))
         return true;
   }
      
@@ -151,8 +151,8 @@ static int parallelEncoding(bool print, FILE* outfile) {
       fprintf(outfile,"%d %d ",(i+1),-(gnum_relevant_facts+gnum_actions+i+1));
       actvar = gnum_relevant_facts+1;
       for (Action* a = gactions; a; a = a->next) {
-        for (int j = 0; j < a->num_adds; j++)
-          if (a->adds[j] == i) {
+        for (int j = 0; j < numAdds(a); j++)
+          if (getAdd(a,j) == i) {
             fprintf(outfile,"%d ",actvar);
             break;
           }
@@ -165,8 +165,8 @@ static int parallelEncoding(bool print, FILE* outfile) {
       fprintf(outfile,"%d %d ",-(i+1),(gnum_relevant_facts+gnum_actions+i+1));
       actvar = gnum_relevant_facts+1;
       for (Action* a = gactions; a; a = a->next) {
-        for (int j = 0; j < a->num_dels; j++)
-          if (a->dels[j] == i) {
+        for (int j = 0; j < numDels(a); j++)
+          if (getDel(a,j) == i) {
             fprintf(outfile,"%d ",actvar);
             break;
           }            
@@ -180,7 +180,7 @@ static int parallelEncoding(bool print, FILE* outfile) {
   return numcl;
 }
 
-void translate_Translate(FILE* outfile, BoolState& initial_state) {
+void translate_Translate(FILE* outfile, BoolState& start_state, Clause& target_condition) {
   int varidx = 0;
 
   for (; varidx < gnum_relevant_facts; varidx++) {
@@ -194,25 +194,60 @@ void translate_Translate(FILE* outfile, BoolState& initial_state) {
     printAction(outfile,a);
   }    
   fprintf(outfile,"c START\n");
+
+  // pass on a hint that it is sufficient to decide on the action variables, i.e. the state variables are implied and should not be explicitly decided upon
+  fprintf(outfile,"c implied %d %d\n",1,gnum_relevant_facts+1);  // low value included, high value excluded
   
   // initial condition
   fprintf(outfile,"i cnf %d %d\n",gnum_relevant_facts+gnum_actions,gnum_relevant_facts);
-  for (size_t i = 0; i < initial_state.size(); i++)
-    fprintf(outfile,"%d 0\n",initial_state[i] ? (int)(i+1) : (int) -(i+1));   
+  for (size_t i = 0; i < start_state.size(); i++)
+    fprintf(outfile,"%d 0\n",start_state[i] ? (int)(i+1) : (int) -(i+1));   
   
   // goal condition
-  fprintf(outfile,"g cnf %d %d\n",gnum_relevant_facts+gnum_actions,ggoal_state.num_F);
-  for (int i = 0; i < ggoal_state.num_F; i++)
-    fprintf(outfile,"%d 0\n",ggoal_state.F[i]+1);
+  fprintf(outfile,"g cnf %d %zu\n",gnum_relevant_facts+gnum_actions,target_condition.size());
+  for (size_t i = 0; i < target_condition.size(); i++)
+    fprintf(outfile,"%zu 0\n",target_condition[i]+1);
   
   if (gcmd_line.just_translate == 1) {
-    int numcl = linearEncoding(false,0);
+    int numcl = sequentialEncoding(false,0);
     fprintf(outfile,"t cnf %d %d\n",2*(gnum_relevant_facts+gnum_actions),numcl);
-    linearEncoding(true,outfile);
+    sequentialEncoding(true,outfile);
   } else {
     int numcl = parallelEncoding(false,0);
     fprintf(outfile,"t cnf %d %d\n",2*(gnum_relevant_facts+gnum_actions),numcl);
     parallelEncoding(true,outfile);
+  }
+  
+  if (gcmd_line.gen_invariant) {
+    // do the forward invariant even in forward dir (backward invariant is useless for planning benchmarks)
+    bool extra_flip; 
+    if ((extra_flip = !gcmd_line.reverse)) {// assiment intended!
+      gcmd_line.reverse = 1; // will force forward invariant computation 
+
+      // hack the (already above properly used) target condition to the clauses false in the initial state
+      target_condition.clear();
+      for (size_t i = 0; i < start_state.size(); i++ ) 
+        if (!start_state[i])
+          target_condition.push_back(i);      
+    }
+   
+    invariant_Init(target_condition);
+    
+    fprintf(outfile,"u cnf %d %zu\n",gnum_relevant_facts+gnum_actions,invariant_Size());
+    
+    const char* maybe_minus = extra_flip ? "-" : "";
+    
+    while (invariant_CurrentValid()) {
+      BinClause& bcl = invariant_Current();
+                    
+      if (bcl.l1 == bcl.l2)
+        fprintf(outfile,"%s%d 0\n",maybe_minus,bcl.l1+1);
+      else 
+        fprintf(outfile,"%s%d %s%d 0\n",maybe_minus,bcl.l1+1,maybe_minus,bcl.l2+1);
+        
+      invariant_Next();
+    }
+    invariant_Done();
   }
 }
 
@@ -250,7 +285,7 @@ void translate_DumpGrounded(BoolState& start_state, Clause& target_condition) {
       fprintf(out_file,")\n");
     }
     
-    if (a->num_adds + numDels(a) > 0) {
+    if (numAdds(a) + numDels(a) > 0) {
       fprintf(out_file,"\t:effect (and ");
       for (int i = 0; i < numAdds(a); i++) {
         print_GroundedFactToFile(getAdd(a,i),out_file);

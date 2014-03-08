@@ -89,9 +89,16 @@ bool subsumes(Clause const &c1, Clause const &c2) {
   return true;
 }
 
+bool actionApplicable(BoolState &state, Action* a) {
+  for (int i = 0; i < numPreconds(a); i++)
+    if (!state[getPrecond(a,i)])
+      return false;
+  return true;
+}
+
 void applyActionEffects(BoolState &state, Action* a) {
-  for (int i = 0; i < a->num_adds; i++)
-    state[a->adds[i]] = true;
+  for (int i = 0; i < numAdds(a); i++)
+    state[getAdd(a,i)] = true;
   for (int i = 0; i < numDels(a); i++)
     state[getDel(a,i)] = false;  
 }

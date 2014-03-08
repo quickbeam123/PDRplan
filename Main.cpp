@@ -36,7 +36,6 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <algorithm>
 #include <string>
 
-
 using namespace std;
 
 /* refcounted wrapper for storing layer clauses */
@@ -89,22 +88,6 @@ struct Obligation {
 };
 
 typedef list<Obligation*> Obligations;
-
-void printSolution(FILE* outfile,Obligation* obl, size_t next_guys_id) {
-  if (obl->parent) {
-    if (!gcmd_line.reverse) {
-      // pre order using depth
-      printSolution(outfile,obl->parent,0);
-      fprintf(outfile,"%zu:   ",obl->depth-1);
-      printAction(outfile,obl->action);
-    } else {                 
-      // post order using counter
-      fprintf(outfile,"%zu:   ",next_guys_id);
-      printAction(outfile,obl->action);    
-      printSolution(outfile,obl->parent,next_guys_id+1);
-    }
-  }
-}
 
 // Helper class to store more than one clause in a continuous vector
 // it works like a "stream" where we always record the clause's size and then its literals
@@ -204,7 +187,10 @@ struct SolvingContext {
 
   size_t sigsize;
   BoolState start_state;
-     
+  
+  // intialized only when (gcmd_line.minimize > 1)
+  BoolState goal_lits;   // true if the lit should be true in the goal state; used for efficient inductive minimization
+  
   BinClauseBuffer invariant;  
   
   // clause sitting primarily here:
@@ -219,7 +205,6 @@ struct SolvingContext {
   // statistics
   size_t oblig_processed;  
   size_t oblig_sat;  
-  size_t oblig_branch;
   size_t oblig_side;
   size_t oblig_unsat;
   size_t oblig_subsumed;  
@@ -236,12 +221,18 @@ struct SolvingContext {
   float time_extend_sat;
   float time_extend_uns;
   float time_pushing;
+  float time_postprocessing;
+  
+  size_t path_min_layer;       // this one is for statistics
+  size_t least_affected_layer; // this one is for speeding up clause propagation (otherwise more or less the same!)
   
   SolvingContext() : phase(0), sigsize(0),
-                     oblig_processed(0), oblig_sat(0), oblig_branch(0), oblig_side(0), oblig_unsat(0), oblig_subsumed(0), oblig_killed(0),
+                     oblig_processed(0), oblig_sat(0), oblig_side(0), oblig_unsat(0), oblig_subsumed(0), oblig_killed(0),
                      cla_derived(0), cla_second(0), cla_subsumed(0), cla_pushed(0),
                      minim_attempted(0), minim_litkilled(0),
-                     time_extend_sat(0.0), time_extend_uns(0.0), time_pushing(0.0)
+                     time_extend_sat(0.0), time_extend_uns(0.0), time_pushing(0.0), time_postprocessing(0.0),
+                     path_min_layer(1),
+                     least_affected_layer(1)
   {
   
   }
@@ -272,10 +263,7 @@ struct SolvingContext {
     {
       printf("\nObligations:\n");
       printf("\t%zu processed,\n",oblig_processed);      
-      if (gcmd_line.spawnallstates)
-        printf("\t%zu extended (%f extensions per sat call),\n",oblig_sat,oblig_branch*(1.0/oblig_sat));         
-      else
-        printf("\t%zu extended,\n",oblig_sat);
+      printf("\t%zu extended,\n",oblig_sat);
       printf("\t%zu sidestepped,\n",oblig_side);  
       printf("\t%zu blocked,\n",oblig_unsat);
       if (gcmd_line.obl_subsumption == 2)
@@ -291,7 +279,6 @@ struct SolvingContext {
       // oblig_side = 0;
       // oblig_unsat = 0;           
       
-      oblig_branch = 0;
       oblig_subsumed = 0;
       oblig_killed = 0;
     }   
@@ -308,10 +295,7 @@ struct SolvingContext {
         }
           
       printf("\nClauses:\n");      
-      if (gcmd_line.minimize == 2)
-        printf("\t%zu derived (%zu secondary clauses),\n",cla_derived,cla_second);        
-      else
-        printf("\t%zu derived,\n",cla_derived);
+      printf("\t%zu derived,\n",cla_derived);
       printf("\t%zu subsumed,\n",cla_subsumed);
       printf("\t%zu pushed,\n",cla_pushed);      
       printf("\t%zu kept (average size %f lits ).\n",cla_kept,cla_lensum*(1.0/cla_kept));
@@ -362,6 +346,8 @@ struct SolvingContext {
       printf("\t%fs SAT (%f calls per second),\n",time_extend_sat,(oblig_sat+oblig_side)/time_extend_sat);
       printf("\t%fs UNS (%f calls per second),\n",time_extend_uns,oblig_unsat/time_extend_uns);
       printf("\t%fs spent pushing.\n",time_pushing);
+      if (gcmd_line.postprocess && !between_phases) 
+        printf("\t%fs spent postprocessing the plan.\n",time_postprocessing);                
                    
       time_extend_sat = 0.0;
       time_extend_uns = 0.0;
@@ -464,10 +450,9 @@ struct SolvingContext {
   vector<size_t> false_clauses; // indices to layers_delta[layer_idx] pointing to clauses unsat in state
   
   // extend output:  
-  vector<Action*>   extend_actions_out; // may return more than one
-  
-  size_t            extend_no_clauses;
-  vector<Clause>    extend_clause_out;  // may return more than one   
+  Action*           extend_action_out;
+    
+  Clause            extend_clause_out;  // may return more than one   
   
   vector<int>       reason_histogram;
   static const size_t  histogram_size = 10; 
@@ -484,32 +469,24 @@ struct SolvingContext {
     CompareActionScores(vector<Action *> & acts) : actions(acts) {}
   };
   
-  char extend(size_t layer_idx, BoolState const & state, bool pushTest, bool chat = false) {       
-    char res = 0;
-    
-    // for returning more than one action
-    extend_actions_out.clear();
-    
-    // for returning more than one learned clause (currently max 2)
-    assert(extend_clause_out.size() == 2); // there are two slots allocated
-    extend_no_clauses = 0;                 // and none of them used currently    
-    
-    /*
-    printf("Extend into %zu:\n",layer_idx);
-    printState(state);
-    */
+  char extend(size_t layer_idx, BoolState const & state, bool pushTest, bool chat = false) {           
+    // will be set to a non-null action before returning result > 0  
+    extend_action_out = NULL;
+            
+    //printf("Extend into %zu:\n",layer_idx);
+    //printState(state);    
     
     /*
      false clauses are those which the current state doesn't satisfy
      it is typically much smaller set than the whole layers_delta[layer_idx]
      
-     it pays off to fosuc on false clauses first
+     it pays off to focus on false clauses first
      > for the positive case, we only look at the other clauses (which the action could have made false due to a delete effect)
        when the action looks plausible (all precondintions are true in current and all false_clauses true in the successor)
      > for the negative case (if the default quickreason is on) only plausible actions seek reasons
        among the other clauses
        
-     the "side" trick (the default resched = 2) returns an action as if was a proper successor if it satisfies some false_clauses and does not undo validity any other clause
+     the "side" trick (the default resched = 2) returns an action as if it was a proper successor if it satisfies some false_clauses and does not undo validity any other clause
     */
     false_clauses.clear();
     for (size_t i = 0; i < layers_delta[layer_idx].size(); i++)
@@ -547,7 +524,8 @@ struct SolvingContext {
       Action *a = actions[action_idx];
       
       bool plausible = true;         // as far as we see it, it could be applied and would yield a good successor (satisfying all the clauses it should)
-      bool interesting = false;      // satisfies at least on false clause -> keep the reason set for it
+      bool interesting = false;      // satisfies at least one false clause -> keep the reason set for it
+      a->interesting = 0;
       
       // for "side"
       bool failed_precond = false;   // know explicitly whether a side condition failed
@@ -589,11 +567,10 @@ struct SolvingContext {
       for (int i = 0; i < numPreconds(a); i++) {
         int precond = getPrecond(a,i);
         if (!state[precond]) {
-          /*
-          printf("Failed precond: ");
-          print_ft_name(precond); 
-          printf("\n");
-          */
+          
+          //printf("Failed precond: ");
+          //print_ft_name(precond); 
+          //printf("\n");          
         
           if (pushTest)
             goto next_action_1;
@@ -650,9 +627,10 @@ struct SolvingContext {
             buffer.clauses.push_back(cl[j]);        
         }
 
-        if (failed_cnt < false_clauses.size()) {
+        if (failed_cnt < false_clauses.size()) {          
           interesting = true;
-          // printf("Interesting action: "); printAction(stdout,a);
+          a->interesting = 1;
+          //printf("Interesting action: "); printAction(stdout,a);
         } else {
           used_buffer_size--; // the current buffer will get overwritten in the next round (the reasons are boring; effectively subsumed by those of NOOP)                    
         }
@@ -669,7 +647,7 @@ struct SolvingContext {
       if ( plausible ||                                         // normally, only if the action still seems ok, we perform the full test
           (gcmd_line.quick_reason == 0) ||                      // unless we don't want the quickreason trick (seems to harm on UNSAT problems)
           (interesting && gcmd_line.quick_reason == 2) ||       // something in the middle (experimental)
-          (just_because_side = true, can_do_side) ) {            // or if we still need to check whetger "side" is an option ...
+          (just_because_side = true, can_do_side) ) {           // or if we still need to check whether "side" is an option ...
           
         pruneInvalid(layers_deriv[layer_idx],layer_idx);
         
@@ -679,9 +657,9 @@ struct SolvingContext {
         size_t false_clause_idx  = 0;
                        
         for (size_t i = 0; i < layers_delta_size + layers_deriv_size + invariant_size; i++) {
-          bool in_delta = false;
-          bool in_deriv = false;
-          bool in_inv   = false;
+          // bool in_delta = false;
+          // bool in_deriv = false;
+          // bool in_inv   = false;
         
           Clause* p_cl;
           if (i < layers_delta_size) {
@@ -691,14 +669,14 @@ struct SolvingContext {
               continue; // we had this one already
             }
             p_cl = &layers_delta[layer_idx][i]->data;
-            in_delta = true;
+            // in_delta = true;
           } else if (i - layers_delta_size < layers_deriv_size) {
             p_cl = &layers_deriv[layer_idx][i-layers_delta_size]->data;
-            in_deriv = true;
+            // in_deriv = true;
           } else {
             invariant.loadClause(i - layers_delta_size - layers_deriv_size,inv_clause);
             p_cl = &inv_clause;
-            in_inv = true;
+            // in_inv = true;
           }
           Clause &cl = *p_cl;
 
@@ -709,7 +687,7 @@ struct SolvingContext {
           if (just_because_side)
             break;
      
-          // printf("Failed clause: "); printClauseNice(cl);
+          //printf("Failed clause: "); printClauseNice(cl);
           if (pushTest)
             goto next_action_1;
 
@@ -745,23 +723,22 @@ struct SolvingContext {
       
       // all clauses sat in new state
       if (plausible) {
+        // printf("SAT\n"); 
+      
         if (pushTest)
           return 1;
       
         // there is a room for heuristics when picking just one next state        
-        // printf("Succesfully going forward!\n");        
-        res = 1;
-        extend_actions_out.push_back(a);
-        if (!gcmd_line.spawnallstates) { // the way it is usually done
-
-          // syst3: bring the successful action to front
-          for (size_t i = act_idx; i > 0; i--)
-            actions_ord[i] = actions_ord[i-1];
-          actions_ord[0] = action_idx;         
+        // printf("Succesfully going forward!\n");      
+        extend_action_out = a;
         
-          // printf("SAT\n");
-          return 1;
-        }  
+        // syst3: bring the successful action to front
+        for (size_t i = act_idx; i > 0; i--)
+          actions_ord[i] = actions_ord[i-1];
+        actions_ord[0] = action_idx;         
+              
+        // printAction(stdout,extend_action_out);
+        return 1;
       }
                   
       if (can_do_side &&
@@ -780,44 +757,22 @@ struct SolvingContext {
         false_precond_lits[getPrecond(a,i)] = false;            
     }
     
-    // all actions checked here !!!
-    
-    if (res) {
-      // printf("SAT\n");
-      return 1;
-    }
-      
+    // all actions checked here !!!         
     if (pushTest)
       return 0;      
     
     // finishing the "side" trick
-    if (gcmd_line.resched == 2 && best_action != 0) {
-      extend_actions_out.push_back(best_action);
+    if (gcmd_line.resched == 2 && best_action != 0) {      
+      extend_action_out = best_action;
       // printf("SIDE (%d)\n",best_false_after);
+      // printAction(stdout,extend_action_out);
       return 2;
     }
     
-    // printf("UNSAT\n");
+    //printf("UNSAT\n");
     
-    // still need to add the reason for NOOP
-    if (!gcmd_line.noop_from_current) { // the contribution from "no-op" = false clauses from the goal layer      
-      // this branch is obsolete
-    
-      assert(gcmd_line.noop_from_current); // current trick with used_buffer_size might not work for this other (anyway less efficient) option
-    
-      ClauseBuffer & buffer = buffers[used_buffer_size++];
-      buffer.clear();
-      
-      for (size_t i = 0; i < layers_delta[0].size(); i++) {
-        Clause& cl = layers_delta[0][i]->data;
-        assert(cl.size() == 1);
-        if (!state[cl[0]]) {
-          buffer.num_clauses++;
-          buffer.clauses.push_back(1);
-          buffer.clauses.push_back(cl[0]);
-        }
-      }   
-    } else { // the contribution from "no-op" = clauses from current layer false in the given state
+    // the contribution from "no-op" = clauses from current layer false in the given state
+    { 
       ClauseBuffer & buffer = buffers[used_buffer_size++];
       buffer.clear();
       buffer.action = NULL;
@@ -904,9 +859,9 @@ struct SolvingContext {
           if (!working_state[buffer.clauses[i]])
             curadds++;
         }
-        
-        // printf("\n");        
-        
+        /*
+        printf("\n");        
+        */
         if (curadds < best_adds) {
           best_adds = curadds;
           best_idx = curbase;
@@ -948,52 +903,96 @@ struct SolvingContext {
     
       // printf("Minimizing:\n");
       randomPermutation(lit_ord,sigsize); // TODO: could have better minimization heuristics (like avoiding the first action's reason first)
-      for (size_t lit_idx = 0; lit_idx < sigsize; lit_idx++) {
-        if (working_state[lit_ord[lit_idx]]) { // could remove this guy
-          size_t saved = lit_ord[lit_idx];
-          working_state[saved] = false;
-          
-          // check if we still "fit in" with the contributions
-          for (size_t act_idx = 0; act_idx < buffer_ord.size(); act_idx++) {
-            ClauseBuffer & buffer = buffers[buffer_ord[act_idx]];      
-            
-            size_t i = 0;
-            size_t sz = 0;
-            while (i < buffer.clauses.size()) {
-              sz = buffer.clauses[i++];
-              while (sz) {
-                if (!working_state[buffer.clauses[i]])
-                  break;
-                i++, sz--;
-              }
-              if (sz)
-                i += sz;
-              else
-                goto next_action_2; // the current is OK
-            }
-            
-            /*
-            printf("Kept "); print_ft_name(saved); printf(" also because of "); 
-            if (buffer.action)
-              printAction(stdout,buffer.action);
-            else
-              printf("(NOOP)\n");
-            */
-            
-            // none of them is good enough - put the literal back
-            working_state[saved] = true;
-            goto next_literal;
-            
-            next_action_2: ;
-          }
-        
-          // good riddance :)
-          minim_litkilled++;
-        }
-        
-        next_literal: ;
+      
+      int goal_lits_remaining = 0;
+      if (gcmd_line.minimize > 1) {
+        for (size_t i = 0; i < sigsize; i++)
+          if (goal_lits[i] && working_state[i])
+            goal_lits_remaining++;
       }
       
+      bool removed_something;
+      do {
+        removed_something = false;
+      
+        for (size_t lit_idx = 0; lit_idx < sigsize; lit_idx++) {
+          if (working_state[lit_ord[lit_idx]]) { // could remove this guy
+            size_t saved = lit_ord[lit_idx];
+            working_state[saved] = false;
+            if (goal_lits[saved])
+              goal_lits_remaining--;
+            
+            // check if we still "fit in" with the contributions
+            for (size_t act_idx = 0; act_idx < buffer_ord.size(); act_idx++) {
+              ClauseBuffer & buffer = buffers[buffer_ord[act_idx]];      
+              size_t i = 0;
+              size_t sz = 0;              
+            
+              if (goal_lits_remaining) {       // can apply the inductive argument
+                assert(gcmd_line.minimize > 1);
+                
+                // can try the inductive reason first
+                if (buffer.action) {
+                  for (int i = 0; i < numAdds(buffer.action); i++) {
+                    int add = getAdd(buffer.action,i);
+                    if (working_state[add])
+                      goto all_the_standard_reasons_to_try;
+                  }
+                } else { // the NOOP action itself is never a problem, but it represents all the non-interesting actions which need to be tried, and why not try them now?
+                  for (Action* a = gactions; a; a = a->next) 
+                    if (!a->interesting)
+                      for (int i = 0; i < numAdds(a); i++) {
+                        int add = getAdd(a,i);
+                        if (working_state[add])
+                          goto all_the_standard_reasons_to_try;
+                      }
+                }
+                
+                // either NOOP, which always succeds inductively, or the action cannot make our current clause true anyway
+                goto next_action_2;
+              }
+              
+              all_the_standard_reasons_to_try: ;              
+
+              while (i < buffer.clauses.size()) {
+                sz = buffer.clauses[i++];
+                while (sz) {
+                  if (!working_state[buffer.clauses[i]])
+                    break;
+                  i++, sz--;
+                }
+                if (sz)
+                  i += sz;
+                else
+                  goto next_action_2; // the current is OK
+              }
+              
+              /*
+              printf("Kept "); print_ft_name(saved); printf(" also because of "); 
+              if (buffer.action)
+                printAction(stdout,buffer.action);
+              else
+                printf("(NOOP)\n");
+              */
+              
+              // none of them is good enough - put the literal back
+              working_state[saved] = true;
+              if (goal_lits[saved])
+                goal_lits_remaining++;
+              goto next_literal;
+              
+              next_action_2: ;
+            }
+          
+            // good riddance :)
+            removed_something = true;
+            minim_litkilled++;
+          }
+          
+          next_literal: ;
+        }
+      } while (gcmd_line.minimize > 2 && removed_something);
+            
       /*
       printf("Minimized to   ");
       printState(working_state);      
@@ -1010,108 +1009,11 @@ struct SolvingContext {
       */
     }      
         
-    extend_clause_out[0].clear();
+    extend_clause_out.clear();
     for (size_t i = 0; i < working_state.size(); i++)
       if (working_state[i])
-        extend_clause_out[0].push_back(i);
-    extend_no_clauses = 1;
+        extend_clause_out.push_back(i);    
     
-    if (gcmd_line.minimize == 2) {
-      // printf("Looking for a second clause\n");
-
-      // prepare a random permutation that first goes throught literals of the last clause
-      // CAREFUL: we use the fact that working_state still represents the last clause !
-      randomPermutation(lit_ord,sigsize);        
-      size_t nocl = 0; // number of literals in the last clause
-      while (nocl < lit_ord.size() && working_state[lit_ord[nocl]])
-        nocl++;
-      if (nocl < lit_ord.size()) { // nocl points to a literal not from the clause
-        size_t j = nocl+1;
-        while (j < lit_ord.size())
-          if (working_state[lit_ord[j]]) {
-            // swap
-            size_t t = lit_ord[nocl];
-            lit_ord[nocl] = lit_ord[j];
-            lit_ord[j] = t;
-            nocl++, j++;
-          } else {
-            //just move on
-            j++;
-          }
-      }
-      assert(nocl == extend_clause_out[0].size());
-                 
-      // changing semantics of working_state - let it be the longest possible clause
-      size_t nofl = 0; // number of false literals in state
-      for (size_t i = 0; i < working_state.size(); i++) {
-        working_state[i] = !state[i];
-        if (working_state[i])
-          nofl++;
-      }
-      
-      if (nofl > nocl) { // minimization makes sense
-        size_t first_riddance = sigsize;
-        for (size_t lit_idx = 0; lit_idx < sigsize; lit_idx++) {
-          if (working_state[lit_ord[lit_idx]]) { // could remove this guy
-            size_t saved = lit_ord[lit_idx];
-            working_state[saved] = false;
-            
-            // check if we still "fit in" with the contributions
-            for (size_t act_idx = 0; act_idx < buffer_ord.size(); act_idx++) {
-              ClauseBuffer & buffer = buffers[buffer_ord[act_idx]];      
-              
-              size_t i = 0;
-              size_t sz = 0;
-              while (i < buffer.clauses.size()) {
-                sz = buffer.clauses[i++];
-                while (sz) {
-                  if (!working_state[buffer.clauses[i]])
-                    break;
-                  i++, sz--;
-                }
-                if (sz)
-                  i += sz;
-                else
-                  goto next_action_3; // the current is OK
-              }
-              
-              // none of them is good enough - put the literal back
-              working_state[saved] = true;
-              goto next_literal_2;
-              
-              next_action_3: ;
-            }
-          
-            // good riddance :)
-            if (first_riddance == sigsize)
-              first_riddance = lit_idx;
-          }
-          
-          next_literal_2: ;
-        }
-      
-        if (first_riddance < nocl) { // write it 
-          extend_clause_out[extend_no_clauses].clear();
-          for (size_t i = 0; i < working_state.size(); i++)
-            if (working_state[i])
-              extend_clause_out[extend_no_clauses].push_back(i);
-          extend_no_clauses++;
-          
-          cla_second++;
-          
-          /*
-          printf("Second clause   ");
-          printState(working_state);   
-          */
-        } else {
-          // printf("Couldn't kill any of the first clause's literals!\n");        
-        }
-      
-      } else {
-        // printf("First clause spans all - no further minimization possible!\n");
-      }
-    }
-  
     return 0;
   }
   
@@ -1222,6 +1124,68 @@ struct SolvingContext {
       
     return 0;
   }
+
+  void processAndPrintSolution(FILE* outfile,Obligation* obl) {    
+    vector< pair<Action*,size_t> > plan;    
+
+    // extract the plan 
+    while (obl->parent) {
+      plan.push_back(make_pair(obl->action,0));
+      obl = obl->parent;
+    }
+    reverse(plan.begin(), plan.end());
+          
+    if (gcmd_line.postprocess) { // Action Elimination (Nakhost & Mueller 2010)
+      times(&start);
+                  
+      BoolState s = start_state, t;
+      size_t i = 0;
+      while (i < plan.size()) {
+        plan[i].second = i+1; // mark a_i
+        t = s;                // a_i skipped
+        for (size_t j = i+1; j < plan.size(); j++ ) {
+          if (actionApplicable(t,plan[j].first))
+            applyActionEffects(t,plan[j].first);
+          else
+            plan[j].second = i+1; // mark a_j
+        }
+        
+        if (isLayerState(0,t)) {  // goal satisfied         
+          // remove marked
+          size_t k = i;  // will be overwritten
+          for (size_t j = i+1; j < plan.size(); j++) {
+            if (plan[j].second != i+1) // unmarked stays
+              plan[k++] = plan[j];
+          }
+          plan.resize(k);                                    
+        } else {
+          applyActionEffects(s,plan[i].first);
+          i++;
+        }
+        
+        // NOTICE: no action is marked by i+1 at this moment
+      }      
+      printf("Reduced to %zu actions.\n",plan.size());
+      
+      times(&end);
+      TIME( time_postprocessing );
+    }
+    
+    // printing
+    int idx, delta;
+    if (!gcmd_line.reverse) {
+      idx = 0;
+      delta = 1;
+    } else {
+      idx = plan.size()-1;
+      delta = -1;
+    }
+    for (size_t i = 0; i < plan.size(); i++) {    
+      fprintf(outfile,"%zu:   ",i);
+      printAction(outfile,plan[idx].first);
+      idx += delta;
+    }
+  }  
   
   bool processObligations() {
     assert(phase);
@@ -1272,6 +1236,12 @@ struct SolvingContext {
       // printf("Handling obligation with depth %zu and state of size %zu\n",obl->depth,obl->state.size());
       oblig_processed++;
       
+      if (obl_top < path_min_layer)
+        path_min_layer = obl_top;
+      
+      if (obl_top+1 < least_affected_layer)
+        least_affected_layer = obl_top+1;
+        
       times(&start);
       
       char res;      
@@ -1292,15 +1262,14 @@ struct SolvingContext {
           obl_grave.push_back(obl);          
       
         // going forward     
-        assert(extend_actions_out.size() > 0);
-        oblig_branch += extend_actions_out.size();
-        for (size_t i = 0; i < extend_actions_out.size(); i++) {
-          Obligation* new_obl = new Obligation(obl,extend_actions_out[i]);
+        assert(extend_action_out != NULL);
+        {
+          Obligation* new_obl = new Obligation(obl,extend_action_out);
           new_obl->depth = obl->depth+1;
           new_obl->state = obl->state;
-          applyActionEffects(new_obl->state,extend_actions_out[i]);
+          applyActionEffects(new_obl->state,extend_action_out);
                     
-          //printf("Extended by action "); printAction(stdout,extend_actions_out[i]);          
+          //printf("Extended by action "); printAction(stdout,extend_action_out);          
               
           if (res > 1) { // sidestep
             obligations[obl_top].push_back(new_obl);    
@@ -1313,11 +1282,11 @@ struct SolvingContext {
               filename += gcmd_line.fct_file_name;
               filename += ".soln";
                          
-              FILE* outfile = fopen(filename.c_str(),"w");            
+              FILE* outfile = fopen(filename.c_str(),"w");              
               if (!outfile)
                 printf("%s\n",strerror(errno));              
               else {
-                printSolution(outfile,new_obl,0);          
+                processAndPrintSolution(outfile,new_obl);
                 fclose(outfile);
               }
               
@@ -1340,10 +1309,10 @@ struct SolvingContext {
         times(&end);
         TIME( time_extend_uns );
       
-        for (size_t i = 0; i < extend_no_clauses; i++) {
+        {
           cla_derived++;
           
-          size_t empty_layer = insertClauseIntoLayers(extend_clause_out[i],obl_top+1);
+          size_t empty_layer = insertClauseIntoLayers(extend_clause_out,obl_top+1);
           
           if (empty_layer) {
             if (gcmd_line.obl_survive < 2)
@@ -1359,7 +1328,7 @@ struct SolvingContext {
             
             for (Obligations::iterator it = obligations[obl_top].begin(); it != obligations[obl_top].end(); ) {
               Obligation* tmp_obl = *it;
-              if (clauseUnsatisfied(extend_clause_out[i],tmp_obl->state)) {
+              if (clauseUnsatisfied(extend_clause_out,tmp_obl->state)) {
                 it = obligations[obl_top].erase(it);
                 obl_grave.push_back(tmp_obl); // cannot delete directly, they may by part of the future plan
                 oblig_killed++;
@@ -1370,7 +1339,7 @@ struct SolvingContext {
           } else if (gcmd_line.obl_subsumption) {
             for (Obligations::iterator it = obligations[obl_top].begin(); it != obligations[obl_top].end(); ) {
               Obligation* tmp_obl = *it;
-              if (clauseUnsatisfied(extend_clause_out[i],tmp_obl->state)) {
+              if (clauseUnsatisfied(extend_clause_out,tmp_obl->state)) {
                 it = obligations[obl_top].erase(it);
                 obligations[obl_top+1].push_back(tmp_obl);
                 oblig_subsumed++;
@@ -1396,7 +1365,7 @@ struct SolvingContext {
     // printf("clausePushing\n");
     
     assert(layers_delta.size() == phase+2);     
-    for (size_t idx = 1; idx <= phase; idx++) {
+    for (size_t idx = least_affected_layer; idx <= phase; idx++) {
       size_t j = 0;
       for (size_t i = 0; i < layers_delta[idx].size(); i++) {
         ClauseBox* clbox = layers_delta[idx][i];
@@ -1409,6 +1378,8 @@ struct SolvingContext {
         pushState.resize(sigsize,true);
         for (size_t n = 0; n < clbox->data.size(); n++)
           pushState[clbox->data[n]] = false;
+        
+        // printf("Trying clause from layer %zu: ",idx); printClauseNice(clbox->data);
         
         if (extend(idx,pushState,true)) { // SAT -> not pushed
           layers_delta[idx][j++] = clbox;
@@ -1463,7 +1434,10 @@ struct SolvingContext {
         return true;
       }
     }
-        
+    
+    least_affected_layer = phase+1; 
+    // we are at the end of a phase so least_affected_layer will be equal to the new value of phase next time clausePushing is called (unless explicitly decremented)
+    
     return false;
   }
 
@@ -1505,11 +1479,7 @@ struct SolvingContext {
       // printf("Checking action "); printAction(stdout,a);
       actions.push_back(a);
     }
-    buffers.resize(gnum_actions+1, ClauseBuffer()); // the last guy represents the "no-op" that ensures monotonicity             
-  
-    // we can currently return up to two learned clauses when extension is not possible
-    extend_clause_out.push_back(Clause());
-    extend_clause_out.push_back(Clause());
+    buffers.resize(gnum_actions+1, ClauseBuffer()); // the last guy represents the "no-op" that ensures monotonicity                 
      
     // extend one more step - to be ready for phase 1
     layers_delta.push_back(Clauses());
@@ -1523,9 +1493,9 @@ struct SolvingContext {
       printf("UNSAT: initial state doesn't satisfy the backward invariant!\n");
       return;
     }   
-    
-    for (phase = 1 ;; phase++) {
-      if (gcmd_line.pphase)
+        
+    for (phase = 1 ;; phase++) {    
+      if (gcmd_line.pphase == 1)
         printf("Phase %zu\n",phase);        
     
       if (gcmd_line.phaselim && (int)phase > gcmd_line.phaselim) {
@@ -1533,21 +1503,34 @@ struct SolvingContext {
         return;
       }
       
-      if ((gcmd_line.cla_subsumption == 2) && // clause pushing is on          
-          stateNotModel(start_state,layers_delta[phase])) {
-        if (gcmd_line.pphase)
-          printf("Skipped - initial state doesn't satisfy pushed clauses!\n");          
+      bool reinsert_initial = (!gcmd_line.obl_survive || !gcmd_line.resched || phase == 1 || gcmd_line.obl_subsumption == 2);
+      bool result = false;
+      
+      if (reinsert_initial && (gcmd_line.cla_subsumption == 2) && stateNotModel(start_state,layers_delta[phase])) {
+        if (gcmd_line.pphase == 1)
+            printf("Skipped - initial state doesn't satisfy pushed clauses!\n");      
       } else {
-        if (!gcmd_line.obl_survive || !gcmd_line.resched || phase == 1 || gcmd_line.obl_subsumption == 2) {
+        if (reinsert_initial) {
           Obligation* obl = new Obligation(NULL,NULL); // the initial guy has no parents
           obl->depth = 0;
           obl->state = start_state;
-          obligations[phase-1].push_front(obl); // so that it is picked last with oblig_prior_stack+obl_survive+obl_subsumption=2
+          obligations[phase-1].push_front(obl); // so that it is picked last with oblig_prior_stack+obl_survive+obl_subsumption=2        
         }
-        
-        if (processObligations())
-          return;
+        result = processObligations();
       }
+      if (gcmd_line.pphase == 2) {
+        for (size_t i = 0; i < phase; i++)
+          if (i < path_min_layer)
+            printf(".");
+          else
+            printf("*");
+        printf("\n");
+
+        path_min_layer = phase+1;
+      }
+      
+      if (result)
+        return;
       
       // extending for the next phase, so that pushing can fill the new layer
       layers_delta.push_back(Clauses());
@@ -1567,7 +1550,7 @@ struct SolvingContext {
           return;        
       }
 
-      if (gcmd_line.pphase) {
+      if (gcmd_line.pphase == 1) {
         printStat();
         /*
         printf("Layers: ----------------------------- \n");
@@ -1583,7 +1566,7 @@ static void SIGINT_exit(int signum) {
   printf("*** INTERRUPTED ***\n");    
   context.printGOStat();
   fflush(stdout);  
-  _exit(1); 
+  _exit(1);
 }
 
 void normalizeActions() { // "first delete then add" is the official semantics!
@@ -1663,15 +1646,6 @@ int main(int argc, char** argv)
   initial_state.resize(gnum_relevant_facts,false);
   for (int i = 0; i < ginitial_state.num_F; i++ ) 
     initial_state[ginitial_state.F[i]] = true;
-  
-  if (gcmd_line.just_translate) {            
-    printf("\nTranslating problem with operator file %s and fact file %s.\n",gcmd_line.ops_file_name,gcmd_line.fct_file_name);           
-        
-    translate_Translate(stdout,initial_state);
-        
-    fflush(stdout);
-    _exit(0);
-  }
       
   bool sat_in_initial = true;
   for (int i = 0; i < ggoal_state.num_F; i++ )
@@ -1685,7 +1659,7 @@ int main(int argc, char** argv)
     exit(0);
   }
       
-  // starts state
+  // start state
   if (!gcmd_line.reverse) {
     start_state = initial_state;
                     
@@ -1701,6 +1675,15 @@ int main(int argc, char** argv)
     for (size_t i = 0; i < initial_state.size(); i++ ) 
       if (!initial_state[i])
         target_condition.push_back(i);                  
+  }
+  
+  if (gcmd_line.just_translate) {            
+    printf("\nTranslating problem with operator file %s and fact file %s.\n",gcmd_line.ops_file_name,gcmd_line.fct_file_name);           
+        
+    translate_Translate(stdout,start_state,target_condition);
+        
+    fflush(stdout);
+    _exit(0);
   }
   
   if (gcmd_line.just_dumpgrounded) {
@@ -1721,15 +1704,23 @@ int main(int argc, char** argv)
     
     //signature
     context.sigsize = gnum_relevant_facts;
+    
     //start
-    context.start_state = start_state;
-    //goal
+    context.start_state = start_state;       
+    
+    //goal - putting into layers and also into goal_lits for fast random access with induction
+    context.goal_lits.resize(gnum_relevant_facts,false);    
+    
     for (size_t i = 0; i < target_condition.size(); i++ ) {
       temp_clause.clear();
-      temp_clause.push_back(target_condition[i]); 
+      temp_clause.push_back(target_condition[i]);                
       ClauseBox* clbox = new ClauseBox(temp_clause,0);     
       target_layer.push_back(clbox->inc());    
+      
+      if (gcmd_line.minimize > 1)
+        context.goal_lits[target_condition[i]] = true;       
     }
+    
     // invariant
     if (gcmd_line.gen_invariant) {
       float time_invariant = 0.0;

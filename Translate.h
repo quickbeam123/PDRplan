@@ -24,8 +24,9 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <cstdio>
 
 #include "Common.h"
+#include "Invariant.h"
 
-void translate_Translate(FILE* outfile, BoolState& initial_state);
+void translate_Translate(FILE* outfile, BoolState& start_state, Clause& target_condition);
 
 void translate_DumpGrounded(BoolState& start_state, Clause& target_condition);
 
