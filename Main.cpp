@@ -1242,7 +1242,9 @@ struct SolvingContext {
     */
     
     size_t obl_top = phase-1;  
-    for(;;) {
+    for(;;) {      
+      assert(obligations[0].size() <= 1 || gcmd_line.resched > 1); // The first stack is always trivial, unless we do sidestepping
+    
       while (obl_top < phase && obligations[obl_top].size() == 0)
         obl_top++;
         
@@ -1381,7 +1383,9 @@ struct SolvingContext {
                    
         //rescheduling
         if (gcmd_line.resched)
-          obligations[obl_top+1].push_back(obl);        
+          obligations[obl_top+1].push_back(obl);
+        else 
+          delete obl;
       }
     }  
   }
@@ -1398,6 +1402,8 @@ struct SolvingContext {
         ClauseBox* clbox = layers_delta[idx][i];
         
         // TODO: swapping trick that always temporarily makes i-th clause the first one could speed up pushing (fast fail in extend for each stupid action)
+        // yes, but since the_clause goes to false_clases anyway the only way to speed it up would be to force false_clase = { the_clause } (only true when clause subsumption is on)
+        // the saving is then not per every action, but only once per call to extend - seems not to pay off
         
         pushState.clear();
         pushState.resize(sigsize,true);
@@ -1415,9 +1421,35 @@ struct SolvingContext {
           bool res = pruneLayerByClause(clbox->data,layers_delta[idx+1],idx+1,false,dummy);          
           assert(res && !dummy);
           
+          // TODO: why not prune in deriv as well? could it not be harmfull, to keep them there? Think:
+          /*
+          size_t before = cla_subsumed;          
+          res = pruneLayerByClause(clbox->data,layers_deriv[idx+1],idx+1,false,dummy);          
+          assert(res && !dummy);          
+          if (cla_subsumed > before)
+            printf("Subsumed in deriv!\n");
+          */
+          
           layers_deriv[idx].push_back(clbox); // inheriting the refcount point from layers_delta[idx] from where we remove it
           clbox->extendedTo(idx+1);
-          layers_delta[idx+1].push_back(clbox->inc());          
+          layers_delta[idx+1].push_back(clbox->inc());
+
+          // obl_subsumption is obligatory in pushing when obl_survive, otherwise we could later violate `false_clauses.size() > 0' in extend...
+          assert(!gcmd_line.obl_survive || gcmd_line.obl_subsumption); 
+                    
+          if (gcmd_line.obl_subsumption) {            
+            for (Obligations::iterator it = obligations[idx].begin(); it != obligations[idx].end(); ) {
+              assert(idx == phase); // as we currently only call pushing between phases, only the obligations[phase] are possibly non-empty and that only in survive mode
+              Obligation* tmp_obl = *it;
+              if (clauseUnsatisfied(clbox->data,tmp_obl->state)) {
+                it = obligations[idx].erase(it);
+                obligations[idx+1].push_back(tmp_obl);
+                oblig_subsumed++;
+              } else {
+                ++it;
+              }
+            }
+          }          
         }
       }
       layers_delta[idx].resize(j);
@@ -1506,7 +1538,7 @@ struct SolvingContext {
         if (gcmd_line.pphase)
           printf("Skipped - initial state doesn't satisfy pushed clauses!\n");          
       } else {
-        if (!gcmd_line.obl_survive || phase == 1 || gcmd_line.obl_subsumption == 2) {
+        if (!gcmd_line.obl_survive || !gcmd_line.resched || phase == 1 || gcmd_line.obl_subsumption == 2) {
           Obligation* obl = new Obligation(NULL,NULL); // the initial guy has no parents
           obl->depth = 0;
           obl->state = start_state;
@@ -1719,7 +1751,16 @@ int main(int argc, char** argv)
           unitcl++;
         else 
           bincl++;
-        context.invariant.pushClause(bcl);                       
+        context.invariant.pushClause(bcl);         
+
+        /*
+        print_ft_name(bcl.l1);
+        if (bcl.l1 != bcl.l2) {
+          printf(" ");
+          print_ft_name(bcl.l2);
+        }
+        printf("\n");          
+        */
         
         invariant_Next();
       }

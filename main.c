@@ -765,11 +765,11 @@ void bb_usage( void )
   printf("-h <0 or 1> Print phase\n");
   
   printf("-b <0 or 1> Obligations handled 0 - queuewise (typically shorter plans), 1 - stackwise (more succesfull to find a plan at all)\n");
-  printf("-e <0 or 2> Rescheduling obligations (when set to 0, produces optimal length plans).\n");  
-  printf("-S <0 or 2> Obligations survive between phases (with 2 there is just one obligation at all times -> incomplete).\n");
+  printf("-e <0 .. 2> Rescheduling obligations (when set to 0, produces optimal length plans).\n");  
+  printf("-S <0 .. 2> Obligations survive between phases (with 2 there is just one obligation at all times -> incomplete).\n");
   
   printf("-m <0 .. 2> Clause minimazation 0 - off, 1 - on, 2 - try producing two clauses\n");
-  printf("-s <0 or 2> Subsume obligations by newly derived clauses (2 = put those that go 'off the rim' to the grave)\n");
+  printf("-s <0 .. 2> Subsume obligations by newly derived clauses (2 = put those that go 'off the rim' to the grave)\n");
   printf("-c <0 .. 2> Clause subsumption 0 -off, 1 - on, 2 - with clause pushing; (may detect UNSAT)\n");
   printf("-a <0 or 1> Extend (positively) in all possible ways\n");
      
@@ -779,7 +779,7 @@ void bb_usage( void )
   printf("-v <0 or 1> Generate invariant unit and binary clauses before the search starts.\n");  
   printf("-r <0 or 1> Reverse - backward search for plan\n");
       
-  printf("-q <0 or 2> Quick (but coarse) reason clause generation: 0 - test all, 1 - test only plausible, 2 - test also interesting.\n");
+  printf("-q <0 .. 2> Quick (but coarse) reason clause generation: 0 - test all, 1 - test only plausible, 2 - test also interesting.\n");
 
   printf("-x <0 or 1> Experimental - no-op reasons from the current layer (and not from the goal layer).\n");
   
