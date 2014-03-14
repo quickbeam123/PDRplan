@@ -766,10 +766,10 @@ void bb_usage( void )
   
   printf("-b <0 or 1> Obligations handled 0 - queuewise (typically shorter plans), 1 - stackwise (more succesfull to find a plan at all)\n");
   printf("-e <0 .. 2> Rescheduling obligations (when set to 0, produces optimal length plans).\n");  
-  printf("-S <0 .. 2> Obligations survive between phases (with 2 there is just one obligation at all times -> incomplete).\n");
+  printf("-S <0 or 1> Obligations survive between phases.\n");
   
   printf("-m <0 .. 2> Clause minimazation 0 - off, 1 - on, 2 - inductive (one pass), 3 - inductive (till fixpoint)\n");
-  printf("-s <0 .. 2> Subsume obligations by newly derived clauses (2 = put those that go 'off the rim' to the grave)\n");
+  printf("-s <0 or 1> Subsume obligations by newly derived clauses.\n");
   printf("-c <0 .. 2> Clause subsumption 0 -off, 1 - on, 2 - with clause pushing; (may detect UNSAT)\n");
      
   printf("-t <0 .. 2> Translate to spec file [1 - linear encoding, 2 - parallel encoding] written to stdout and finish.\n");

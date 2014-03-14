@@ -81,10 +81,17 @@ struct Obligation {
   size_t depth;
   BoolState state;
     
-  Obligation* parent;
+  Obligation* parent; // for recovering plans
   Action *action;
   
-  Obligation(Obligation* p, Action* a) : parent(p), action(a) {}
+  Obligation* next;    // for building small obligation stacks during sidesteps
+
+  Obligation(Obligation* p, Action* a) : parent(p), action(a), next(0) {}
+  
+  ~Obligation() {
+    if (next)
+      delete next;
+  }
 };
 
 typedef list<Obligation*> Obligations;
@@ -200,7 +207,6 @@ struct SolvingContext {
   vector< Clauses > layers_deriv;     // size == phase+1, i.e. phase is a valid index into the last layer  
   
   vector< Obligations > obligations;  // size == phase
-  Obligations obl_grave;
   
   // statistics
   size_t oblig_processed;  
@@ -252,10 +258,6 @@ struct SolvingContext {
     for (size_t i = 0; i < obligations.size(); i++)
       for (Obligations::iterator j = obligations[i].begin(); j != obligations[i].end(); ++j)           
         delete *j;
-        
-    // and the grave
-    for (Obligations::iterator j = obl_grave.begin(); j != obl_grave.end(); ++j)           
-      delete *j;    
   }
   
   void printStat(bool between_phases = true) {             
@@ -266,12 +268,7 @@ struct SolvingContext {
       printf("\t%zu extended,\n",oblig_sat);
       printf("\t%zu sidestepped,\n",oblig_side);  
       printf("\t%zu blocked,\n",oblig_unsat);
-      if (gcmd_line.obl_subsumption == 2)
-        printf("\t%zu subsumed (%zu extra killed).\n",oblig_subsumed,oblig_killed);      
-      else
-        printf("\t%zu subsumed.\n",oblig_subsumed);      
-      if (gcmd_line.obl_survive == 2 || gcmd_line.obl_subsumption == 2)
-        printf("\n\t%zu obligations in the grave.\n",obl_grave.size());
+      printf("\t%zu subsumed.\n",oblig_subsumed);    
             
       // The following are reset after the timing report:
       // oblig_processed = 0;
@@ -1190,21 +1187,6 @@ struct SolvingContext {
   bool processObligations() {
     assert(phase);
     
-    assert(gcmd_line.resched < 2 || gcmd_line.oblig_prior_stack); 
-    /* "side" is a bit weird. 
-        We don't guarantee that a state will not generate the same side next time it is considered.
-        This may lead to problems with "oblig_prior_queue" as exemplified on the WOODWORKING domain.
-        
-        Initial obligation A "sides" to give a better "B",
-        then A is considered again and sides B again
-        then B is considered and sides a better C,
-        then we need to deal with A again
-        then we need to deal with A again 
-        ... 
-       
-        BLEE %)
-    */
-    
     size_t obl_top = phase-1;  
     for(;;) {      
       assert(obligations[0].size() <= 1 || gcmd_line.resched > 1); // The first stack is always trivial, unless we do sidestepping
@@ -1249,59 +1231,50 @@ struct SolvingContext {
         times(&end);
         TIME( time_extend_sat );
       
-        if (res > 1) {
-          oblig_side++;          
-        } else {
-          oblig_sat++;          
-        }        
-      
-        // the parent goes back
-        if (gcmd_line.obl_survive < 2) /* gcmd_line.obl_survive == 2 is incomplete! */
-          obligations[obl_top].push_back(obl);
-        else  
-          obl_grave.push_back(obl);          
-      
-        // going forward     
+        // going forward
         assert(extend_action_out != NULL);
-        {
-          Obligation* new_obl = new Obligation(obl,extend_action_out);
-          new_obl->depth = obl->depth+1;
-          new_obl->state = obl->state;
-          applyActionEffects(new_obl->state,extend_action_out);
-                    
-          //printf("Extended by action "); printAction(stdout,extend_action_out);          
-              
-          if (res > 1) { // sidestep
-            obligations[obl_top].push_back(new_obl);    
-          } else {
-            if (obl_top == 0) {
-              printf("SAT: plan of length %zu found\n",new_obl->depth);
-              
-              string filename;
-              filename += gcmd_line.path;
-              filename += gcmd_line.fct_file_name;
-              filename += ".soln";
-                         
-              FILE* outfile = fopen(filename.c_str(),"w");              
-              if (!outfile)
-                printf("%s\n",strerror(errno));              
-              else {
-                processAndPrintSolution(outfile,new_obl);
-                fclose(outfile);
-              }
-              
-              delete new_obl;         
-              return true;
-            }
+        Obligation* new_obl = new Obligation(obl,extend_action_out);
+        new_obl->depth = obl->depth+1;
+        new_obl->state = obl->state;
+        applyActionEffects(new_obl->state,extend_action_out);
+                  
+        //printf("Extended by action "); printAction(stdout,extend_action_out);
+
+        if (res > 1) { // sidestep
+          oblig_side++;
           
-            obligations[obl_top-1].push_back(new_obl);
-          }        
-        }
+          new_obl->next = obl; // building a small stack inside one slot
+          obligations[obl_top].push_front(new_obl);  // TODO: experiment - this means queue will get it rightaway, whereas stack will have to wait for it !!!                   
+          
+        } else {
+          oblig_sat++;
+          
+          // the parent goes back
+          obligations[obl_top].push_back(obl);          
         
-        if (res > 1) 
-          ;
-        else
-          obl_top--; // going forward with the new guy(s)
+          if (obl_top == 0) {
+            printf("SAT: plan of length %zu found\n",new_obl->depth);
+            
+            string filename;
+            filename += gcmd_line.path;
+            filename += gcmd_line.fct_file_name;
+            filename += ".soln";
+                       
+            FILE* outfile = fopen(filename.c_str(),"w");            
+            if (!outfile)
+              printf("%s\n",strerror(errno));              
+            else {
+              processAndPrintSolution(outfile,new_obl);          
+              fclose(outfile);
+            }
+            
+            delete new_obl;         
+            return true;
+          }
+        
+          obligations[obl_top-1].push_back(new_obl);
+          obl_top--; // going forward with the new guy
+        }
              
       } else {
         oblig_unsat++;        
@@ -1309,44 +1282,50 @@ struct SolvingContext {
         times(&end);
         TIME( time_extend_uns );
       
-        {
-          cla_derived++;
+        cla_derived++;
           
-          size_t empty_layer = insertClauseIntoLayers(extend_clause_out,obl_top+1);
+        size_t empty_layer = insertClauseIntoLayers(extend_clause_out,obl_top+1);
           
-          if (empty_layer) {
-            if (gcmd_line.obl_survive < 2)
-              printf("UNSAT: repetition detected!\nDelta-layer %zu emptied by subsumption!\n",empty_layer);
-            else
-              printf("UNRESOLVED: repetition detected under incompete setup!\nDelta-layer %zu emptied by subsumption!\n",empty_layer);
-            delete obl;          
-            return true;
-          }            
+        if (empty_layer) {
+          printf("UNSAT: repetition detected!\nDelta-layer %zu emptied by subsumption!\n",empty_layer);
+          delete obl;          
+          return true;
+        }            
         
-          // obligation subsumption
-          if (gcmd_line.obl_subsumption == 2 && obl_top+1 == phase) { // we put them to the grave when they go "off the rim"
+        if (obl->next) { // disconnecting the small stack  - doing it before the subsumption check !
+          obligations[obl_top].push_back(obl->next);
+          obl->next = 0;
+        }
+        
+        // obligation subsumption
+        if (gcmd_line.obl_subsumption) {
+          for (Obligations::iterator it = obligations[obl_top].begin(); it != obligations[obl_top].end(); ) {
+            Obligation* old_stack = *it;
+            Obligation* new_stack = 0;
+            Obligation** backref = &new_stack;
             
-            for (Obligations::iterator it = obligations[obl_top].begin(); it != obligations[obl_top].end(); ) {
-              Obligation* tmp_obl = *it;
+            while (old_stack) {
+              Obligation* tmp_obl = old_stack;
+              old_stack = tmp_obl->next;
+              tmp_obl->next = 0;
+              
               if (clauseUnsatisfied(extend_clause_out,tmp_obl->state)) {
-                it = obligations[obl_top].erase(it);
-                obl_grave.push_back(tmp_obl); // cannot delete directly, they may by part of the future plan
-                oblig_killed++;
-              } else {
-                ++it;
-              }
-            }
-          } else if (gcmd_line.obl_subsumption) {
-            for (Obligations::iterator it = obligations[obl_top].begin(); it != obligations[obl_top].end(); ) {
-              Obligation* tmp_obl = *it;
-              if (clauseUnsatisfied(extend_clause_out,tmp_obl->state)) {
-                it = obligations[obl_top].erase(it);
-                obligations[obl_top+1].push_back(tmp_obl);
+
+                obligations[obl_top+1].push_back(tmp_obl);                               
+                
                 oblig_subsumed++;
               } else {
-                ++it;
+
+                *backref = tmp_obl;
+                backref = &(tmp_obl->next);
               }
             }
+
+            if (new_stack) {
+              *it = new_stack;
+              ++it;
+            } else
+              it = obligations[obl_top].erase(it);     
           }
         }
                    
@@ -1412,6 +1391,7 @@ struct SolvingContext {
             for (Obligations::iterator it = obligations[idx].begin(); it != obligations[idx].end(); ) {
               assert(idx == phase); // as we currently only call pushing between phases, only the obligations[phase] are possibly non-empty and that only in survive mode
               Obligation* tmp_obl = *it;
+              assert(tmp_obl->next == 0); // when obligations get this far, all the small stacks must have been broken down to pieces 
               if (clauseUnsatisfied(clbox->data,tmp_obl->state)) {
                 it = obligations[idx].erase(it);
                 obligations[idx+1].push_back(tmp_obl);
@@ -1426,10 +1406,7 @@ struct SolvingContext {
       layers_delta[idx].resize(j);
     
       if (layers_delta[idx].size() == 0) {
-        if (gcmd_line.obl_survive < 2)
-          printf("UNSAT: repetition detected!\nDelta-layer %zu emptied by pushing!\n",idx);
-        else
-          printf("UNRESOLVED: repetition detected under incompete setup!\nDelta-layer %zu emptied by pushing!\n",idx);
+        printf("UNSAT: repetition detected!\nDelta-layer %zu emptied by pushing!\n",idx);        
           
         return true;
       }
@@ -1503,7 +1480,7 @@ struct SolvingContext {
         return;
       }
       
-      bool reinsert_initial = (!gcmd_line.obl_survive || !gcmd_line.resched || phase == 1 || gcmd_line.obl_subsumption == 2);
+      bool reinsert_initial = (!gcmd_line.obl_survive || !gcmd_line.resched || phase == 1);
       bool result = false;
       
       if (reinsert_initial && (gcmd_line.cla_subsumption == 2) && stateNotModel(start_state,layers_delta[phase])) {
@@ -1514,7 +1491,7 @@ struct SolvingContext {
           Obligation* obl = new Obligation(NULL,NULL); // the initial guy has no parents
           obl->depth = 0;
           obl->state = start_state;
-          obligations[phase-1].push_front(obl); // so that it is picked last with oblig_prior_stack+obl_survive+obl_subsumption=2        
+          obligations[phase-1].push_front(obl); // so that it is picked last with oblig_prior_stack+obl_survive          
         }
         result = processObligations();
       }
