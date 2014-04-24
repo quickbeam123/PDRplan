@@ -31,7 +31,7 @@ void invariant_Init(Clause& goal_condition);    /* prepares the invariant, setti
 
 size_t invariant_Size();                        /* Number of clauses in the invariant */
 bool invariant_CurrentValid();                  /* does the implicit iterator correspond to a real value ? */
-BinClause& invariant_Current();                 /* retrieve the value of the implicit itetator */
+const BinClause& invariant_Current();                 /* retrieve the value of the implicit itetator */
 void invariant_Next();                          /* move the implicit iterator one step fwd*/
 
 void invariant_Done();                          /* release the module's data strucutures */

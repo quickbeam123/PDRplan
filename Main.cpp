@@ -1738,7 +1738,7 @@ int main(int argc, char** argv)
       context.invariant.reserve(invariant_Size());           
       
       while (invariant_CurrentValid()) {
-        BinClause& bcl = invariant_Current();
+        BinClause bcl = invariant_Current();
                       
         if (bcl.l1 == bcl.l2)
           unitcl++;

@@ -238,7 +238,7 @@ void translate_Translate(FILE* outfile, BoolState& start_state, Clause& target_c
     const char* maybe_minus = extra_flip ? "-" : "";
     
     while (invariant_CurrentValid()) {
-      BinClause& bcl = invariant_Current();
+      BinClause bcl = invariant_Current();
                     
       if (bcl.l1 == bcl.l2)
         fprintf(outfile,"%s%d 0\n",maybe_minus,bcl.l1+1);

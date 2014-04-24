@@ -22,167 +22,258 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <cassert>
 
 #include <vector>
-#include <map>
-#include <queue>
-#include <stack>
+#include <list>
+
+const char FL_NONE = 0;
+const char FL_PRE  = 1;
+const char FL_ADD  = 2;
+const char FL_DEL  = 4;
 
 using namespace std;
 
-struct Todo {
-  int clause;
-  Action* act;   // NULL means all
-  int witness;   // -1 means undef
-  Todo(int cl) : clause(cl), act(NULL), witness(-1) {}
-  Todo(int cl, Action* a, int wi) : clause(cl), act(a), witness(wi) {}
-};
-
-struct BinClauseImpl : BinClause {   
-  vector<Todo> watched;
-};
-
-typedef map<int,BinClauseImpl> Clauses;
-
-// global temporaries
-int playground_mark;
-vector<int> playground;
-
-/* returns true if the clause should die; if it lives but just with other's support, the supporter is informed */
-static bool checkClause(Clauses& clauses,           /* all the currently living clauses*/
-                        Clauses::iterator it,       /* a ptr to the clause to be rechecked */
-                        Action* act,                /* against this action */
-                        Clauses::iterator hint) {   /* start checking against other clauses from here */
-                        
-  BinClauseImpl& cl = it->second;
-                        
-  // 1 - if preconds intersect with clause   
-  for (int i = 0; i < numPreconds(act); i++)
-    if (getPrecond(act,i) == cl.l1 || getPrecond(act,i) == cl.l2)
-      return false;
+struct ClBox {
+  int other_lit;
+  ClBox *next;
+  ClBox **next_at_prev;
+  ClBox *other;
   
-  playground_mark++;
-  playground[cl.l1] = playground_mark;
-  playground[cl.l2] = playground_mark;
+  ClBox(int lit) : other_lit(lit), next(0), next_at_prev(0), other(0) {}
   
-  // 2 - if adds don't intersect with clause
-  bool saves = false;
-  for (int i = 0; i < numAdds(act); i++)
-    if (getAdd(act,i) == cl.l1 || getAdd(act,i) == cl.l2) {
-      playground[getAdd(act,i)] = 0;
-      saves = true;
-      // don't break, leave a chance to cancel out the other as well
-    }
+  void integrate(ClBox** holder) {  // like insert
+    assert(holder);
+    next = *holder;
+    *holder = this;
+    next_at_prev = holder;
+    if (next) {
+      assert(next->next_at_prev == holder);
+      next->next_at_prev = &next;
+    }    
+  }    
     
-  if (!saves)
-    return false;
-                       
-  // 3 - mark the delete effects
-  for (int i = 0; i < numDels(act); i++)
-    playground[getDel(act,i)] = playground_mark;  
-  
-  // 4 - traverse all the clauses 
-  while (hint != clauses.end()) {
-    BinClauseImpl& other_cl = hint->second;
-  
-    if (playground[other_cl.l1] == playground_mark && playground[other_cl.l2] == playground_mark) { // this one is false
-      other_cl.watched.push_back(Todo(it->first,act,hint->first));      
-      return false;
+  void disintegrate() {             // like remove 
+    assert(next_at_prev);
+    assert(*next_at_prev == this);
+    *next_at_prev = next;
+    if (next) {
+      assert(next->next_at_prev == &next);      
+      next->next_at_prev = next_at_prev;
     }
-    ++hint;
   }
   
-  return true;                     
+};
+
+vector<char> playground;
+vector< ClBox* > clauses;
+
+int cl_cnt;
+
+size_t idx;
+BinClause result;
+
+static bool unit(int i) {
+  return (clauses[i] && !clauses[i]->other);
 }
 
-Clauses           *p_clauses;  // global guy to store the result
-Clauses::iterator implicit_it; // and an iterator therein
+static void loadA(Action* a) {
+  for (int i = 0; i < numPreconds(a); i++) 
+    playground[getPrecond(a,i)] |= FL_PRE;
+    
+  for (int i = 0; i < numAdds(a); i++) 
+    playground[getAdd(a,i)] |= FL_ADD;
+    
+  for (int i = 0; i < numDels(a); i++) 
+    playground[getDel(a,i)] |= FL_DEL;
+}
 
-void invariant_Init(Clause& goal_condition) {     
-  playground_mark = 0; 
+static void unloadA(Action* a) {
+  for (int i = 0; i < numPreconds(a); i++) 
+    playground[getPrecond(a,i)] = FL_NONE;
+    
+  for (int i = 0; i < numAdds(a); i++) 
+    playground[getAdd(a,i)] = FL_NONE;
+    
+  for (int i = 0; i < numDels(a); i++) 
+    playground[getDel(a,i)] = FL_NONE;
+}
+
+static bool isPre(int idx) {
+  return (playground[idx] & FL_PRE) != FL_NONE;
+}
+
+static bool isAdd(int idx) {
+  return (playground[idx] & FL_ADD) != FL_NONE;
+}
+
+static bool isDel(int idx) {
+  return (playground[idx] & FL_DEL) != FL_NONE;
+}
+
+void invariant_Init(Clause& goal_condition) {
+  cl_cnt = 0;
+
   playground.clear();
-  playground.resize(gnum_relevant_facts,0);
-        
-  int last_clause = 0;
-  p_clauses = new Clauses();
-  Clauses& clauses = *p_clauses;
-  vector<bool> units;
-  stack<Todo> stack;   
-  
-  units.resize(gnum_relevant_facts,false);
-  for (size_t i = 0; i < goal_condition.size(); i++)
-    if (!units[goal_condition[i]]) {
-      last_clause++;
-      BinClauseImpl &cl = clauses[last_clause];
-      cl.l1 = cl.l2 = goal_condition[i];
-      units[goal_condition[i]] = true;
-      stack.push(Todo(last_clause));
-    }
-  
-  while (!stack.empty()) {
-    Todo t = stack.top(); stack.pop();
+  playground.resize(gnum_relevant_facts,FL_NONE);
     
-    // printf("%zu - clauses (%d last_clause), %zu - requests on the stack\n",clauses.size(),last_clause,stack.size());
+  clauses.clear();
+  //fixed size from now on -- reallocate would kill us!
+  clauses.resize(gnum_relevant_facts,0);
     
-    Clauses::iterator it = clauses.find(t.clause);
-    if (it == clauses.end())  // the clause has been deleted in the meantime
-      continue;
-    
-    bool dying = false;
-    if (t.act == NULL) {
-      for (Action* a = gactions; a; a = a->next) {      
-        dying = checkClause(clauses, it, a, clauses.begin());        
-        if (dying)
-          break;
-      }      
-    } else
-      dying = checkClause(clauses, it, t.act, clauses.upper_bound(t.witness));
-    
-    if (dying) {
-      BinClauseImpl& cl = it->second;
+  for (size_t i = 0; i < goal_condition.size(); i++) {
+    int cond = goal_condition[i];
+    if (!clauses[cond]) { //insert each unit only once
+      ClBox *unit = new ClBox(cond);
+      unit->integrate(&clauses[cond]);
       
-      // enqueue watched guys
-      for (size_t i = 0; i < cl.watched.size(); i++)
-        stack.push(cl.watched[i]);
+      // printf("Created unit %d\n",(int)cond);
+      
+      cl_cnt++;
+    }
+  }
+
+  bool modified;
+  do {
+    modified = false;
     
-      if (cl.l1 == cl.l2) { //unit clause - replacing it by binary ones
-        assert(units[cl.l1]);
+    // a fixedpoint is finally reach iff:
+    // for all clauses $c$ and all actions $a$. 
+    // $(pre_a \cap c = \emptyset \land add_a \cap c \neq \emptyset --> 
+    //            \exists d . d \subseteq ((c \setminus add_a) \cup del_a)$
+    
+    // we can assume actions normalized: pre_a \cap add_a = \emptyset \land del_a \cap add_a = \emptyset
+    
+    for (Action* a = gactions; a; a = a->next) {
+      loadA(a);
+    
+      // printAction(stdout,a); 
+    
+      for (int i = 0; i < numAdds(a); i++) {
+        int c_lit = getAdd(a,i);
+        ClBox* c = clauses[c_lit];
         
-        for (int i = 0; i < gnum_relevant_facts; i++) 
-          if (!units[i]) {
-            last_clause++;
-            BinClauseImpl &new_cl = clauses[last_clause];              
-            new_cl.l1 = cl.l1;
-            new_cl.l2 = i;
-            stack.push(Todo(last_clause));
+        while (c) {
+          int c_other_lit = c->other_lit;
+        
+          // printf("lit = %d, other = %d\n",c_lit,c_other_lit);
+        
+          if (isPre(c_other_lit)) { // NOT (pre_a \cap c = \emptyset)
+            c = c->next;
+            continue;
           }
 
-        units[cl.l1] = false; // a trick to set it only here so the we don't generate the "binary" clause containing this unit's literal twice
+          if (isAdd(c_other_lit)) // (c \setminus add_a) = emptyset
+            c_other_lit = -1;     // do not ``pair up'' via c_other_lit
+        
+          // search for a clause d
+          bool found = false;               
+          for (int j = 0; j < numDels(a); j++) {
+            ClBox* d = clauses[getDel(a,j)];
+            
+            while (d) {
+              if (isDel(d->other_lit)) // CANNOT KILL ANY CLAUSE: \exists d. d \subseteq del_a
+                goto next_action;      // also work for unit(d)
+            
+              if (c_other_lit == d->other_lit) {
+                found = true;
+                goto d_iter_finished;
+              }
+              
+              d = d->next;
+            }
+          }
+        
+          d_iter_finished:
+          if (!found) { // action a says: clause c must be killed
+            modified = true;
+          
+            ClBox *dead = c;
+            c = c->next;      // move fwd with c
+                                    
+            if (dead->other) {            
+              // printf("Killing binay %d,%d\n",c_lit,dead->other_lit);            
+            
+              dead->other->disintegrate();                         
+              delete dead->other;              
+              
+            } else { // a unit dies
+              // printf("Killing unit %d\n",c_lit);
+            
+              for (int j = 0; j < gnum_relevant_facts; j++) {                
+                if (j != c_lit && !unit(j)) {
+                  cl_cnt++;
+                  ClBox* lit1 = new ClBox(j);
+                  ClBox* lit2 = new ClBox(c_lit);
+
+                  lit1->other = lit2;
+                  lit2->other = lit1;
+                  
+                  lit1->integrate(&clauses[c_lit]);
+                  lit2->integrate(&clauses[j]);                                                    
+                  
+                  // printf("Creating binary %d,%d\n",c_lit,j);
+                }
+              }
+            }
+          
+            // disconnect next prev
+            dead->disintegrate();            
+            delete dead;
+            
+            cl_cnt--;
+          } else
+            c = c->next;      // move fwd with c
+        }
       }
-                       
-      // kill it
-      clauses.erase(it);      
-    }       
-  }   
-     
+
+      next_action: 
+      unloadA(a);
+    }      
+    
+    // printf("%d\n",cl_cnt);
+    
+  } while (modified);  
+ 
   playground.clear();
-  implicit_it = clauses.begin();
+    
+  idx = 0;
+  invariant_Next();   
 }
 
 size_t invariant_Size() {
-  return p_clauses->size();
+  return cl_cnt;
 } 
 
 bool invariant_CurrentValid() {
-  return (implicit_it != p_clauses->end());
+  return result.l1 >= 0;
 }
 
-BinClause& invariant_Current() {
-  return implicit_it->second;
+const BinClause& invariant_Current() {
+  return result;
 }
 
 void invariant_Next() {
-  ++implicit_it;
+  while ((idx < clauses.size()) && (!clauses[idx]))
+    idx++;
+    
+  if (idx < clauses.size()) {
+    ClBox *dead = clauses[idx];
+      
+    result.l1 = idx;
+    result.l2 = dead->other_lit;
+    
+    if (dead->other) {
+      dead->other->disintegrate();
+      delete dead->other;
+    }
+    
+    dead->disintegrate();
+    delete dead;
+    
+  } else {
+    result.l1 = -1;
+    result.l2 = -1;
+  }
 }
 
 void invariant_Done() {
-  delete p_clauses;
+  // clean up
 }
