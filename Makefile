@@ -18,8 +18,7 @@ CFLAGS	= -O6 -Wall -ansi $(TYPE) $(ADDONS) -g
 
 LIBS    = -lm
 
-# a workaround to problems with g++-4.7 which errors with "'_exit' was not declared in this scope"
-CPP     = g++-4.4  
+CPP     = g++ 
 
 CPPFLAGS = -O6 -Wall -ansi -g
 #-static
@@ -37,7 +36,7 @@ PDDL_PARSER_OBJ = scan-fct_pddl.tab.o \
 	scan-ops_pddl.tab.o 
 
 
-SOURCES = main.c \
+SOURCES = main_orig.c \
 	memory.c \
 	output.c \
 	parse.c \

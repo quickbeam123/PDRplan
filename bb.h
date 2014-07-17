@@ -175,7 +175,7 @@ extern "C"
 #define MAX_TYPE 2500         /* MS: increased from 2000 */
 
 
-#define MAX_INITIAL 50000     /* MS: increased from 5000 */
+#define MAX_INITIAL 100000     /* MS: increased from 5000 */
 
 
 #define MAX_OPERATORS 105000  /* MS: increased from 12800 */
