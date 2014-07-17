@@ -18,10 +18,11 @@ CFLAGS	= -O6 -Wall -ansi $(TYPE) $(ADDONS) -g
 
 LIBS    = -lm
 
-# a workaround to problems with g++-4.7 which errors with "'_exit' was not declared in this scope"
-CPP     = g++-4.4  
+CPP     = g++ 
 
-CPPFLAGS = -O6 -Wall -ansi -g
+# problems with _exit fixed with pre-included header that redefines
+# _exit as std::exit
+CPPFLAGS = -O6 -Wall -ansi -g -include g++-4.8-compat.h
 #-static
 
 
